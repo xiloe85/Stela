@@ -25,9 +25,10 @@ use std::{
 
 /// Each platform xe binds that the test runs, by a PCI device ID of it, and
 /// whether Vulkan must report it integrated (`false`) or discrete.
-const PLATFORMS: [(&str, &str, bool); 6] = [
+const PLATFORMS: [(&str, &str, bool); 7] = [
     ("9a49", "Tiger Lake", false),
     ("46a6", "Alder Lake P", false),
+    ("7d51", "Arrow Lake P", false),
     ("7d55", "Meteor Lake", false),
     ("56a0", "Arc A770 (DG2)", true),
     ("64a0", "Lunar Lake", false),
