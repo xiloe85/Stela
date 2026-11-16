@@ -34,7 +34,7 @@ pub const TARGET: driver::Target<'static> = driver::Target {
 
 /// Every recipe family, in the order a volume short of room keeps them: the
 /// small network and Bluetooth files first, the GPU's large images last.
-pub const FAMILIES: [(&str, &[Recipe]); 10] = [
+pub const FAMILIES: [(&str, &[Recipe]); 11] = [
     ("Wi-Fi regulatory database", recipes::REGULATORY),
     ("Realtek Ethernet", recipes::REALTEK),
     ("Realtek USB Ethernet", recipes::REALTEK_USB),
@@ -43,6 +43,7 @@ pub const FAMILIES: [(&str, &[Recipe]); 10] = [
     ("Intel Wi-Fi", recipes::INTEL_WIFI),
     ("MediaTek Bluetooth", recipes::MEDIATEK_BLUETOOTH),
     ("Intel Bluetooth", recipes::INTEL_RSA),
+    ("Intel xe", recipes::XE),
     ("AMD GPU", recipes::AMDGPU),
     ("NVIDIA GSP-RM", recipes::GSP),
 ];
@@ -369,6 +370,14 @@ pub fn select(functions: &[Pci]) -> Selection {
         }
         if function.vendor == 0x1002 && function.class == 0x03 {
             if recipes::require_amdgpu(&mut inventory, function.device).is_ok() {
+                selection.plan(&inventory, &why);
+            } else if !selection.unknown.contains(&why) {
+                selection.unknown.push(why.clone());
+            }
+            continue;
+        }
+        if function.vendor == 0x8086 && function.class == 0x03 {
+            if recipes::require_xe(&mut inventory, function.device).is_ok() {
                 selection.plan(&inventory, &why);
             } else if !selection.unknown.contains(&why) {
                 selection.unknown.push(why.clone());

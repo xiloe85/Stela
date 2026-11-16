@@ -2393,6 +2393,17 @@ mod tests {
                 "i915/mtl_dmc.bin"
             ]
         );
+        // Arrow Lake-P's Arc 140T, this port's target: ARL-H is the MTL
+        // platform's descriptor, so the same four files.
+        assert_eq!(
+            xe_files(0x7d51),
+            [
+                "i915/mtl_guc_70.bin",
+                "i915/mtl_huc_gsc.bin",
+                "i915/mtl_gsc_1.bin",
+                "i915/mtl_dmc.bin"
+            ]
+        );
         assert_eq!(
             xe_files(0xe20b),
             ["xe/bmg_guc_70.bin", "xe/bmg_huc.bin", "i915/bmg_dmc.bin"]

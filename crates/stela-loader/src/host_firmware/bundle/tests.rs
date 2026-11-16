@@ -22,8 +22,10 @@ fn the_complete_bundle_holds_every_recipe_once_by_content() {
     // The RTL8168H and RTL8168M share a file, as the RTL9151A and RTL9151AS
     // do, and amdgpu's `mec` and `mec2`.
     assert_eq!(count + 3, recipes().count());
-    // The recipes' recorded lengths: 98 files, 179.2 MiB.
-    assert_eq!((count, bytes), (98, 187_918_072), "{count} {bytes}");
+    // The recipes' recorded lengths: 126 files, 189.1 MiB. Adding Intel xe's
+    // family, which an Intel GPU's probe needs, took it from 98 files and
+    // 179.2 MiB.
+    assert_eq!((count, bytes), (126, 198_321_320), "{count} {bytes}");
     // The GPU's large images come last, for a volume short of room.
     assert_eq!(objects.last().unwrap().length, 64_116_464);
     let manifest = manifest(&complete()).unwrap();

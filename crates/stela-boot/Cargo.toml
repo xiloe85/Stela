@@ -33,6 +33,9 @@ diagnostics = ["stela-drivers/irq-diagnostics"]
 native-profile = ["stela-soc/native-profile", "stela-engine/native-profile"]
 # NVK, NIR and NAK in the image, from `cargo xtask gpu nvk`.
 nvk = ["dep:stela-mesa", "stela-drivers/metal-linked"]
+# xe in the image, so an Intel GPU's claim selects its GuC, HuC, GSC and DMC
+# files and its probe runs; its Vulkan driver is not in the image yet.
+xe = ["stela-drivers/xe-port"]
 
 [dependencies]
 stela-linux = { path = "../stela-linux", features = ["kernel"] }
