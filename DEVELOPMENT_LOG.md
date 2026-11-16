@@ -182,6 +182,58 @@ SPIRV-Tools 2026.4.1, libdrm 2.4.134.
 
 ---
 
+## 2026-11-16 — Session 3: Level 1 on this machine, and Intel in the image
+
+### Level 1: `stela.efi` builds here
+
+Two host gaps had to be closed first:
+
+1. Mesa's Rust cross build needs `std` for `x86_64-unknown-linux-musl`;
+   Arch's `rustc` ships only the native target. Installed **rustup**
+   user-locally (`--no-modify-path`, nothing in the shell config) and
+   `rustup toolchain install 1.99.1 --component rustfmt,clippy,llvm-tools
+   --target x86_64-unknown-linux-musl,x86_64-unknown-uefi`, matching the
+   repository's own `rust-toolchain.toml`. Arch has no `rust-uefi` package,
+   so rustup is the only route to the image target.
+2. Builds then run with `~/.cargo/bin` first on `PATH`.
+
+```
+cargo xtask gpu nvk --jobs 3
+  -> libstela-llvm.a 31.7 MB, libstela-nvk.a 44.2 MB (1257 objects of
+     "nouveau, intel, amd"), libstela-vulkan.a 21.7 MB, StelaGPU.kext
+cargo xtask boot build --release
+  -> stela.efi 158,515,200 bytes, stela-deploy.efi 50,849,280 bytes
+     PE32+ executable for EFI (application), x86-64
+```
+
+### Intel in the image
+
+`xtask/src/boot.rs` gains `STELA_XE` (the tree's existing env-switch
+convention, as `STELA_APP` is): set, the image is built with
+`stela-boot`'s `xe` feature, which pulls `stela-drivers/xe-port`.
+
+```
+STELA_XE=1 cargo xtask boot build --release
+  -> stela.efi 204,364,288 bytes, stela-deploy.efi 52,912,640 bytes
+```
+
+The growth is the driver: the image's newest build directory holds
+`captured-sgpugxeu1n33.o` (xe's registration unit at ordinal 33),
+`libstela-xe.a` and **1109 objects against 860** for the NVIDIA-only image,
+including `xe_reg_whitelist.o`, `xe_reg_sr.o` and `xe_ras.o`.
+
+What that does and does not mean: `stela.efi` now contains xe with the
+i915 display code shared with it, the Intel Metal admission and ANV's ICD
+entry (the archive lists `nouveau, intel, amd`, so `stela_vulkan_intel` is
+set), and the NVIDIA path is unchanged. **No boot has run this image**, on
+Intel or otherwise; nothing here shows a GPU initialised.
+
+### Commits
+
+See `git log` on `fork` — the xtask switch and this log.
+
+---
+
 ## 2026-11-16 — Session 2: host tools, real ANV data, parallel agents
 
 ### Host packages installed (with the user's approval, elevation requested)

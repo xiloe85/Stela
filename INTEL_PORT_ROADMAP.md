@@ -10,7 +10,7 @@ Status vocabulary: **done** / **in progress** / **not started** / **blocked**.
 | Task | Status | Evidence |
 |---|---|---|
 | Clone upstream | done | `Stela-audit/`, commit `865c48e` |
-| Build the project | **partial** | sources fetched; `stela-driver-gpu` builds and tests in the Intel configuration (654 tests, incl. the xe composite's 352 C objects). Full `stela.efi` (`cargo xtask dist`) not built: needs LLVM for UEFI + the Mesa archives |
+| Build the project | **done** | `stela.efi` 158 MB and `stela-deploy.efi` 50.8 MB (PE32+ EFI x86-64) linked from LLVM + the 1257-object Mesa archive (nouveau, intel, amd) + the guest kext. Needed rustup's `x86_64-unknown-linux-musl` (Mesa's Rust cross build) and `x86_64-unknown-uefi` (the image), which Arch's rustc does not ship |
 | Understand source architecture | done | `ARCHITECTURE.md` |
 | Identify NVIDIA-specific components | done | `ARCHITECTURE.md` §5 |
 | Identify Intel PCI ID | done | `8086:7d51`, Arc 140T, Xe-LPG+ 12.74 |

@@ -536,6 +536,11 @@ pub(crate) fn deploy_image(built: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The variable that adds Intel's xe driver, its display code and its Metal
+/// stack to the image (`stela-boot`'s `xe` feature, `stela-drivers`'
+/// `xe-port`). Unset by default: no boot has driven an Intel GPU yet.
+pub const XE_VARIABLE: &str = "STELA_XE";
+
 fn build_with_diagnostics(release: bool, diagnostics: bool, nvk: bool) -> Result<PathBuf> {
     let mut command = cargo();
     command.args(["build", "--locked", "--manifest-path", BOOT_MANIFEST]);
@@ -545,6 +550,10 @@ fn build_with_diagnostics(release: bool, diagnostics: bool, nvk: bool) -> Result
     }
     if nvk {
         command.args(["--features", "nvk"]);
+    }
+    // Intel's driver and Metal stack, which no boot has run yet.
+    if std::env::var_os(XE_VARIABLE).is_some_and(|value| value != "0") {
+        command.args(["--features", "xe"]);
     }
     if release {
         command.arg("--release");
