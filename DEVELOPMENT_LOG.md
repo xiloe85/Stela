@@ -180,6 +180,67 @@ SPIRV-LLVM-Translator is installed on the build host. Everything else it
 needs is present: LLVM/Clang 23.1.3, meson 1.12.1, ninja, glslang 16.6.0,
 SPIRV-Tools 2026.4.1, libdrm 2.4.134.
 
+---
+
+## 2026-11-16 — Session 2: host tools, real ANV data, parallel agents
+
+### Host packages installed (with the user's approval, elevation requested)
+
+```
+pacman -S --needed --noconfirm spirv-llvm-translator vulkan-tools
+  spirv-llvm-translator 23.1.2-1, vulkan-tools 1.4.363.0-1  (nothing else pulled)
+```
+
+### This GPU's Vulkan, measured
+
+`vulkaninfo --summary` (saved as `vulkan-arl-140t.txt`): **Vulkan 1.4.354**,
+`Intel open-source Mesa driver`, `Intel(R) Graphics (ARL)`, `INTEGRATED_GPU`,
+Mesa 26.2.5. **218 device extensions.**
+
+### ANV host test: passed, including this laptop's GPU
+
+```
+Arrow Lake P: ANV on xe: Intel(R) Graphics (ARL) (0x7d51, integrated),
+  NIR options for 6 stages, compute pipeline of 12 instructions in 208 bytes,
+  one dispatch submitted
+  xe ioctls: DEVICE_QUERY 19, EXEC 4, EXEC_QUEUE_CREATE 2, EXEC_QUEUE_DESTROY 2,
+    EXEC_QUEUE_GET_PROPERTY 2, GEM_CREATE 13, GEM_MMAP_OFFSET 14, VM_BIND 28,
+    VM_CREATE 1, VM_DESTROY 1
+ANV ran on xe's ioctls for 7 platforms, with no GPU
+```
+
+Everything ANV issued is an ioctl Stela's xe registers. **No GPU behind the
+shim**, so this proves device creation, BRW codegen for ARL and Stela's
+submission interface — not silicon execution.
+
+### The extension question, settled with data
+
+30 of the 33 extensions Stela enables are present in ANV here. Missing:
+`VK_KHR_unified_image_layouts` (performance only: Stela uses
+`VK_IMAGE_LAYOUT_GENERAL` for every image and only ever transitions
+GENERAL→GENERAL, which core Vulkan allows), `VK_KHR_fragment_shader_barycentric`
+(Metal `BARYCENTRICS` must stay refused) and
+`VK_NV_shader_atomic_float16_vector` (NVIDIA-only). Details in `ANV_GAPS.md`.
+Since the vendored Mesa has the unified-layout extension in NVK and RADV but
+not ANV, Intel will be slower on texture-heavy work, not blocked.
+
+### Parallel agents (opencode, `opencode/glm-5.3-flash-free`)
+
+Three agents ran on disjoint scopes: driver-core device lists (code), ANV gap
+analysis (read-only), Intel firmware wiring (code + plan). **All three hit the
+free-tier usage limit mid-run** (`Error: Free usage limit reached`), so their
+work is partial and was verified by hand rather than trusted:
+
+| Scope | Landed | Verified how |
+|---|---|---|
+| driver-core `class_find_device` / `device_find_child` | real implementations over a membership list, add/del hooks, reference held on return, plus trap removal from nouveau/amdgpu/xe `OPEN` lists and assertions in `device.c`'s hosted test body | `cargo test -p stela-driver-gpu --features xe-port,metal` → **654 passed** (image compiles, import guard accepts the supplied symbols). The new C assertions sit behind `STELA_LINUX_DEVICE_TEST` and were **not executed** by the runs here |
+| ANV gap analysis | agent produced nothing; written by hand from `vulkaninfo` + code reads | `ANV_GAPS.md` |
+| Intel firmware wiring | `recipes::XE` family added to `bundle::FAMILIES` and `select()`, opt-in `xe` feature in `stela-boot`, an ARL firmware-file test; bundle totals updated | `cargo test -p stela-loader --lib` → **355 passed** |
+
+Lesson recorded for the next session: brief agents with the verification
+command they must run, expect them to stop on quota, and never commit their
+diff unread.
+
 ### Not done in this session
 
 - `cargo xtask gpu nvk` / `dist` (image build): not completed.

@@ -75,7 +75,8 @@ LLVM + Clang development files (host has **23.1.3** ✓), SPIRV-Tools,
 | `cargo test -p stela-driver-gpu --features metal` | **ran, passed** — 639 tests, 0 failed, 1 ignored (+ 3 kbuild, 1 llvm-passes) |
 | `cargo test -p stela-driver-gpu --features xe-port,metal -- metal::intel` | **ran, passed** — 4 Intel admission tests, after two build fixes (`kbuild` gate, xe's import list). This compiles the Intel composite: xe + shared i915 display + DRM core, 352 C objects |
 | `cargo test -p stela-driver-gpu --features xe-port,metal` (all) | **ran, passed** — 654 tests, 0 failed, 1 ignored |
-| `cargo xtask gpu anv-test` | **ran, blocked**: `ANV cannot be built on this host: mesa_clc cannot be built here (Dependency "LLVMSPIRVLib" not found (tried pkg-config and cmake))` — `SPIRV-Tools 2026.4.1`, glslang 16.6.0, meson 1.12.1 and libdrm 2.4.134 are present; only SPIRV-LLVM-Translator is missing |
+| `vulkaninfo --summary` | **ran, passed** — Vulkan **1.4.354**, `Intel open-source Mesa driver` (ANV), `Intel(R) Graphics (ARL)`, `INTEGRATED_GPU`, Mesa 26.2.5 (saved to `vulkan-arl-140t.txt`) |
+| `cargo xtask gpu anv-test` | **ran, passed** after installing `spirv-llvm-translator`: ANV built with the image's options ran on xe's ioctls for **7 platforms including `0x7d51`**: `Intel(R) Graphics (ARL) (0x7d51, integrated), NIR options for 6 stages, compute pipeline of 12 instructions in 208 bytes, one dispatch submitted`. **No GPU behind it** — the shim answers the ioctls; this validates device creation, BRW codegen and Stela's xe submission interface, not silicon execution |
 | `cargo xtask gpu nvk` / `dist` (image build) | **not run** — needs LLVM for UEFI + Mesa for the image; hours of compile, ~1 GB RAM free on this machine |
 | Real-GPU dispatch on Arc 140T | **not run** |
 | Stela boot on this laptop | **not run** |
