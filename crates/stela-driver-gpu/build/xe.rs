@@ -112,16 +112,6 @@ const OPEN: super::image::Open = &[
     ),
     // Made only when an audio driver binds the display's component.
     ("HDMI audio's power dependency", &["device_link_add"]),
-    // Traps: Stela's driver core keeps no class device list, so the searches
-    // hwmon.c and backlight.c hold for the GT's sensors and the panel's
-    // backlight have no list to walk. Supplying them means giving `class` and
-    // `device` the lists Linux's driver core keeps, before the display's
-    // backlight or the GT's sensors are registered: the trap is a fault, not
-    // a refusal, so a caller must not reach it.
-    (
-        "the driver core's device lists",
-        &["class_find_device", "device_find_child"],
-    ),
     // Trap: no bus lists a window, so no driver gets as far as assigning a
     // resized BAR (pci_resize_resource itself answers that the host bridge
     // keeps the firmware's assignment).

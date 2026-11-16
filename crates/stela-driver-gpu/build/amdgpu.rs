@@ -99,11 +99,6 @@ const OPEN: super::image::Open = &[
     ),
     // Only the NUMA placement of an accelerator's memory partitions asks.
     ("the firmware's memory map", &["page_is_ram"]),
-    // As nouveau's list has them, through hwmon.c and backlight.c.
-    (
-        "the driver core's device lists",
-        &["class_find_device", "device_find_child"],
-    ),
 ];
 
 /// The unit of amdgpu's own `module_init`.

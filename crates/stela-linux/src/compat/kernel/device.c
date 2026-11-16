@@ -76,6 +76,76 @@ void put_device(struct device *dev)
 		kobject_put(&dev->kobj);
 }
 
+/* One device of a list the driver core keeps: a class's devices, or a
+ * parent's children. Linux hangs those lists off the class's subsys_private
+ * and the parent's device_private (drivers/base/class.c and core.c), which
+ * nothing here has, so each membership is an entry beside the device core
+ * that links it, as the catalogue's entries are. An entry borrows its device
+ * and its container, the class or parent that the membership hangs on. */
+struct membership {
+	struct list_head node;
+	struct device *dev;
+	const void *container; /* the device's class, or its parent */
+};
+static LIST_HEAD(memberships);
+
+static struct membership *enroll(struct device *dev, const void *container)
+{
+	struct membership *member = kzalloc_obj(*member);
+
+	if (member) {
+		member->dev = dev;
+		member->container = container;
+		list_add_tail(&member->node, &memberships);
+	}
+	return member;
+}
+
+/* The entries borrow the device, whose own reference del's puts release, so
+ * a device leaves every list before anything may look for it again. */
+static void unenroll(struct device *dev)
+{
+	struct membership *member, *safe;
+
+	list_for_each_entry_safe(member, safe, &memberships, node) {
+		if (member->dev == dev) {
+			list_del(&member->node);
+			kfree(member);
+		}
+	}
+}
+
+/* A device joins its parent's children and its class's devices at add, where
+ * device_add links the parent and class knodes. */
+static int device_enroll(struct device *dev)
+{
+	if ((!dev->class || enroll(dev, dev->class)) &&
+	    (!dev->parent || enroll(dev, dev->parent)))
+		return 0;
+	return -ENOMEM;
+}
+
+/* The first device of a container after start that matches, with the
+ * reference its caller drops: the search begins after the device it starts
+ * from, as Linux's klist iteration does. */
+static struct device *find_listed(const void *container, const struct device *start,
+				  const void *data, device_match_t match)
+{
+	struct membership *member;
+
+	list_for_each_entry(member, &memberships, node) {
+		if (member->container != container)
+			continue;
+		if (start && member->dev == start)
+			start = NULL;
+		else if (match(member->dev, data)) {
+			get_device(member->dev);
+			return member->dev;
+		}
+	}
+	return NULL;
+}
+
 int device_add(struct device *dev)
 {
 	if (dev->init_name) {
@@ -90,8 +160,12 @@ int device_add(struct device *dev)
 	struct device *parent = dev->parent;
 	get_device(dev);
 	get_device(parent);
-	int error = stela_linux_device_inherit(dev);
+	int error = device_enroll(dev);
+
+	if (!error)
+		error = stela_linux_device_inherit(dev);
 	if (error) {
+		unenroll(dev);
 		put_device(dev);
 		put_device(parent);
 		return error;
@@ -102,6 +176,8 @@ int device_add(struct device *dev)
 void device_del(struct device *dev)
 {
 	struct device *parent = dev->parent;
+
+	unenroll(dev);
 	stela_linux_device_close(dev);
 
 	stela_linux_devres_release(dev);
@@ -216,11 +292,11 @@ STELA_UNSUPPORTED(int, device_for_each_child, struct device *, void *, device_it
 
 /* A class is its name: a device of one is created and attached like any
  * other, and its attribute groups are files nothing reads. Registering a
- * class therefore records nothing, as registering a bus does. A search of a
- * class's devices and of a device's children need the driver core's lists,
- * which do not exist; only a panel driver looks a backlight up by name or
- * node and only an I2C sensor with packet error checking looks for its
- * hwmon child, and the image holds neither. */
+ * class therefore records nothing, as registering a bus does; a device's
+ * membership of its class is what a search of the class's devices walks. A
+ * panel driver looks a backlight up by name or node and an I2C sensor with
+ * packet error checking looks for its hwmon child, which the Intel port
+ * holds, following Linux's class_find_device and device_find_child. */
 int class_register(const struct class *class)
 {
 	return class && class->name ? 0 : -EINVAL;
@@ -231,10 +307,17 @@ void class_unregister(const struct class *class)
 	(void)class;
 }
 
-STELA_UNSUPPORTED(struct device *, class_find_device, const struct class *, const struct device *,
-		  const void *, device_match_t)
-STELA_UNSUPPORTED(struct device *, device_find_child, struct device *, const void *,
-		  device_match_t)
+struct device *class_find_device(const struct class *class, const struct device *start,
+				 const void *data, device_match_t match)
+{
+	return class ? find_listed(class, start, data, match) : NULL;
+}
+
+struct device *device_find_child(struct device *parent, const void *data,
+				 device_match_t match)
+{
+	return parent ? find_listed(parent, NULL, data, match) : NULL;
+}
 
 struct class *class_create(const char *name)
 {
@@ -497,6 +580,53 @@ int main(void)
 	static const struct class unnamed_class = {};
 	assert(!class_register(&test_class) && class_register(&unnamed_class) == -EINVAL);
 	class_unregister(&test_class);
+
+	/* A class's devices are found by name, as backlight.c looks a panel's
+	 * backlight up, and the search returns it referenced. */
+	released = 0;
+	static const struct class backlight = {.name = "backlight"};
+	struct device intel_backlight = {.release = release, .class = &backlight};
+	struct device acpi_video0 = {.release = release, .class = &backlight};
+	device_initialize(&intel_backlight);
+	device_initialize(&acpi_video0);
+	assert(!dev_set_name(&intel_backlight, "intel_backlight"));
+	assert(!dev_set_name(&acpi_video0, "acpi_video0"));
+	assert(!device_add(&intel_backlight) && !device_add(&acpi_video0));
+	struct device *panel = class_find_device(&backlight, NULL, "intel_backlight\n",
+						 device_match_name);
+	assert(panel == &intel_backlight);
+	put_device(panel);
+	assert(!class_find_device(&backlight, NULL, "absent\n", device_match_name));
+	/* The search begins after the device it starts from. */
+	assert(!class_find_device(&backlight, &intel_backlight, "intel_backlight\n",
+				  device_match_name));
+	panel = class_find_device(&backlight, &intel_backlight, "acpi_video0\n",
+				  device_match_name);
+	assert(panel == &acpi_video0);
+	put_device(panel);
+	assert(!class_find_device(NULL, NULL, NULL, device_match_name));
+	class_unregister(&backlight);
+
+	/* A sensor with packet error checking finds its hwmon child, as
+	 * hwmon.c does, and no parent holds no child. */
+	struct device adapter = {.release = release};
+	struct device sensor = {.release = release, .parent = &adapter};
+	device_initialize(&adapter);
+	device_initialize(&sensor);
+	assert(!dev_set_name(&adapter, "i2c-0") && !dev_set_name(&sensor, "hwmon3"));
+	assert(!device_add(&adapter) && !device_add(&sensor));
+	struct device *hwmon = device_find_child(&adapter, "hwmon3\n", device_match_name);
+	assert(hwmon == &sensor);
+	put_device(hwmon);
+	assert(!device_find_child(&adapter, "absent\n", device_match_name));
+	assert(!device_find_child(NULL, NULL, device_match_name));
+
+	/* Unlisting keeps no membership behind: each unregister releases once. */
+	device_unregister(&sensor);
+	device_unregister(&adapter);
+	device_unregister(&acpi_video0);
+	device_unregister(&intel_backlight);
+	assert(released == 4);
 
 	struct class *class = class_create("test");
 	assert(!IS_ERR(class) && !strcmp(class->name, "test"));

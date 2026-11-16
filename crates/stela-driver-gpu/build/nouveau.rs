@@ -42,12 +42,6 @@ const OPEN: super::image::Open = &[
         "HDMI audio",
         &["device_link_add", "platform_device_unregister"],
     ),
-    // Searches of a class's devices and of a device's children, which
-    // hwmon.c and backlight.c hold for I2C sensors and panel drivers.
-    (
-        "the driver core's device lists",
-        &["class_find_device", "device_find_child"],
-    ),
     // The MIPI DSI and auxiliary buses of the DRM archive: no driver of the
     // image registers on either, and only a DSI host's removal walks a
     // device's children.
