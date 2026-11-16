@@ -1,0 +1,80 @@
+[2J[001;001H[=3h[2J[001;001H[2J[001;001H[8;042;160t[2J[001;001H[2J[001;001H[8;056;240t[2J[001;001HBdsDxe: loading Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+STELA UEFI MOUNT version=0.4.2
+FIRMWARE watchdog off
+HOST TSC hz=3686390972 source=pm-timer accuracy_ppm=9 cross_check_ppm=18 agreed=true
+STEP Opening the boot log on the USB t=1.641
+BOOT LOG FILE off: Stela's volume has no \EFI\stela\boot.log
+STEP w Opening the boot log on the USB (not kept: Stela's volume has no \EFI\stela\boot.log) ms=1
+HOST version=0.4.2 cpu="QEMU TCG CPU version 2.5+" family=0x6 model=0x6 stepping=3 ram=4.3GB firmware="EDK II" revision=0x10000
+HOST hypervisor present: stop codes also go to its exit port
+STEP Connecting the firmware's drivers to the boot's devices t=1.646
+FIRMWARE connected 239 of 250 handles, left 11 network controllers to Stela's drivers, 0 slow
+STEP o Connecting the firmware's drivers to the boot's devices ms=78
+STEP Reading Stela's settings t=1.725
+HOST FIRMWARE manifest=absent
+HOST SMBIOS RECORD {"board_vendor":{"state":"not-observed"},"observation":{"bytes":429,"entry_sha256":"2b1b8a012502eda7f27e841af535fc73ef504b9e47d8bd007dc653d9ad03299a","sha256":"8f6785ae0a6f417303e6a1cb4c58eedf100809fa34ab89409aba1472a959bcfa","state":"present","table_sha256":"d00b84eace93bd4a26cd95a9502a62874ac69215aec1d29599243677da4830d1"},"phase":"before-ebs","product_name":{"bytes":31,"sha256":"b899db3ab6335463553199aac8091c02f8f00345eaea93262158b9efa8bd7f58","state":"value"},"product_version":{"bytes":12,"sha256":"b8af04aad71f121c28022a153604204f529bc2cf88654d844449c88c6f23af96","state":"value"},"resource":{"name":"host/smbios/entry-and-table.bin","source":"UEFI SMBIOS configuration table eb9d2d31-2d88-11d3-9a16-0090273fc14d","target":{"board":null,"driver":"host-smbios","hardware":"physical-host","revision":"entry-and-table-v1"}},"source_entry_address":2143715328,"source_guid":"eb9d2d31-2d88-11d3-9a16-0090273fc14d","system_vendor":{"bytes":5,"sha256":"7025be64797268fef7b495d54b1fd6bd93230479f145bae103d606deb2a8abf0","state":"value"}}
+HOST WIFI UEFI before-ebs none of the 18 variables present
+STEP o Reading Stela's settings ms=13
+DISPLAY firmware mode 1280x800 Bgr
+DISPLAY modes 1280x800 Bgr 640x480 Bgr 800x480 Bgr 800x600 Bgr 832x624 Bgr 960x640 Bgr 1024x600 Bgr 1024x768 Bgr 1152x864 Bgr 1152x870 Bgr 1280x720 Bgr 1280x760 Bgr 1280x768 Bgr 1280x960 Bgr 1280x1024 Bgr 1360x768 Bgr 1366x768 Bgr 1400x1050 Bgr 1440x900 Bgr 1600x900 Bgr 1600x1200 Bgr 1680x1050 Bgr 1920x1080 Bgr 1920x1200 Bgr 1920x1440 Bgr 2000x2000 Bgr 2048x1536 Bgr 2048x2048 Bgr 2560x1440 Bgr 2560x1600 Bgr
+DISPLAY EDID image 325x203 mm
+DISPLAY EDID (the virtual display device's registers) prefers 1280x800 at 74.994 Hz
+DISPLAY runs 1280x800 Bgr: the panel's native resolution
+BOOT IMAGE snapshot physical=0x787c8000 bytes=0x3794000 release=ok
+HOST CHECK --host-check --deadline 60
+CPU vendor="AuthenticAMD" brand="QEMU TCG CPU version 2.5+" family=0x6 model=0x6 stepping=3 max_leaf=0xd max_extended=0x80000021
+CPU address bits physical=40 virtual=57
+CPU present SSE3 SSSE3 SSE4.1 SSE4.2 POPCNT CMPXCHG16B LAHF/SAHF-64 NX CMPXCHG8B PCLMULQDQ AES SHA AVX AVX2 F16C FMA BMI1 BMI2 LZCNT MOVBE XSAVE ERMS FSRM RDRAND RDSEED FSGSBASE RDTSCP APIC x2APIC ARAT LA57 1GiB-pages SMEP SMAP hypervisor
+CPU absent OSXSAVE AVX512F AVX512BW AVX512CD AVX512DQ AVX512VL TSC-deadline invariant-TSC PCID INVPCID
+CPU x86-64 level v2
+CHECK cpu PASS x86-64-v2 floor_missing=[] la57=true
+CHECK tsc PASS hz=3686390972 invariant=false source=PmTimer
+HOST PCI 0000:00:00.0 8086:29c0 class=060000 rev=00 subsystem=1af4:1100: not driven
+HOST PCI 0000:00:01.0 1234:1111 class=030000 rev=02 subsystem=1af4:1100: GPU
+HOST PCI 0000:00:02.0 8086:10d3 class=020000 rev=00 subsystem=8086:0000: e1000e Ethernet
+HOST PCI 0000:00:03.0 1b36:000d class=0c0330 rev=01 subsystem=1af4:1100: xHCI USB
+HOST PCI 0000:00:1f.0 8086:2918 class=060100 rev=02 subsystem=1af4:1100: not driven
+HOST PCI 0000:00:1f.2 8086:2922 class=010601 rev=02 subsystem=1af4:1100: AHCI SATA
+HOST PCI 0000:00:1f.3 8086:2930 class=0c0500 rev=02 subsystem=1af4:1100: i801 SMBus
+UNSUPPORTED host GPU 0000:00:01.0 1234:1111: no Stela GPU backend for this PCI vendor
+FIRMWARE boot services ended at try 1 of 4 in 111 ms, map 113 of 341 descriptors
+STELA HOST CHECK
+CHECK native-memory PASS WB native pages: zero/read/write, CPU pin lifetime/reclaim, cache/alignment/bounds refusal; Linux PFN/refcount/compound/split/retirement
+HOST DEVICE FAILED pci=0000:00:02.0 (network) error=native resource service unavailable
+HOST DEVICE FAILED pci=0000:00:03.0 (USB) error=native resource service unavailable
+HOST DEVICE FAILED pci=0000:00:1f.2 (storage) error=native resource service unavailable
+PLATFORM FAILED 0000:00:1f.3 SMBus: native resource service unavailable
+CHECK storage FAIL disks=0 inputs=0 failures=3
+CHECK gpt FAIL internal NVMe/AHCI disks=0 with a GPT=0 (read only)
+CHECK log SKIP no --nor-file
+CHECK apic PASS mode=xAPIC base=0xfee00900 timer_hz=999798425 arat=true tsc_deadline=false
+CHECK interrupts PASS one_shot=1 after 10876 us (expected 1 after 10000) periodic=100 in 100 ms (expected 100) stray=0
+CHECK display PASS 1280x800 stride=1280 BGR base=0x80000000 bytes=0x3e8000 bars=7 read_back_mismatches=0
+CHECK keyboard FAIL no keyboard was brought up
+CHECK display-seen SKIP no keyboard
+
+HOST CHECK SUMMARY
+CHECK cpu PASS x86-64-v2 floor_missing=[] la57=true
+CHECK tsc PASS hz=3686390972 invariant=false source=PmTimer
+CHECK native-memory PASS WB native pages: zero/read/write, CPU pin lifetime/reclaim, cache/alignment/bounds refusal; Linux PFN/refcount/compound/split/retirement
+CHECK storage FAIL disks=0 inputs=0 failures=3
+CHECK gpt FAIL internal NVMe/AHCI disks=0 with a GPT=0 (read only)
+CHECK log SKIP no --nor-file
+CHECK apic PASS mode=xAPIC base=0xfee00900 timer_hz=999798425 arat=true tsc_deadline=false
+CHECK interrupts PASS one_shot=1 after 10876 us (expected 1 after 10000) periodic=100 in 100 ms (expected 100) stray=0
+CHECK display PASS 1280x800 stride=1280 BGR base=0x80000000 bytes=0x3e8000 bars=7 read_back_mismatches=0
+CHECK keyboard FAIL no keyboard was brought up
+CHECK display-seen SKIP no keyboard
+HOST CHECK END pass=6 fail=3 skip=2
+POWER host button: fixed-feature at PM1a_EVT 0x600
+
+>>> The log is saved; powering off is safe now. Press a key to restart, or press the power button (or hold it 4 s) to power off.
+BEAT t=0s
+BEAT t=10s
+BEAT t=20s
+BEAT t=30s
+BEAT t=40s
+BEAT t=50s
+HOST CHECK deadline reached after 60s
+STELA STOPPED code=0x10; power off to continue
