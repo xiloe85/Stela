@@ -321,9 +321,9 @@ extern "sysv64" fn run(machine: &mut Machine) -> ! {
         ),
         Err(error) => machine.record("native-memory", Verdict::Fail, format!("{error:?}")),
     }
-    let mut keyboards = match machine.storage.take() {
+    let (mut keyboards, mounted) = match machine.storage.take() {
         Some(handoff) => disks(machine, &handoff),
-        None => Vec::new(),
+        None => (Vec::new(), false),
     };
     timer(machine);
     match (machine.screen, band) {
@@ -334,21 +334,36 @@ extern "sysv64" fn run(machine: &mut Machine) -> ! {
             String::from("the firmware has no 32-bit GOP framebuffer"),
         ),
     }
-    keyboard(machine, &mut keyboards);
+    keyboard(machine, &mut keyboards, mounted);
     finish(machine, &mut keyboards)
 }
 
-/// The storage, GPT and log checks; returns the keyboards and pointers.
-fn disks(machine: &mut Machine, handoff: &Handoff) -> Vec<InputDevice> {
+/// The storage, GPT and log checks; returns the keyboards, the pointers and
+/// whether this pass ran with the native mount.
+fn disks(machine: &mut Machine, handoff: &Handoff) -> (Vec<InputDevice>, bool) {
     // SAFETY: one CPU after ExitBootServices; `dma` was reserved for this.
     let mut dma = unsafe { RegionAllocator::new(handoff.dma.clone()) };
     // SAFETY: this handoff describes the running machine and its tables.
     let mut devices = unsafe { probe(handoff, machine.captures, &mut dma) };
+    // This check uses the legacy entry point, which passes no native mount, so
+    // every driver that needs the mount's minimum-delay timer, BAR ownership
+    // or IRQ routing files `ServiceError::Unavailable` without being given a
+    // chance to start. That is this lane's shape, not a device's fault: say it
+    // once and skip the checks it makes meaningless.
+    let mounted = devices.native_services;
+    if !mounted {
+        output::arguments(format_args!(
+            "HOST DEVICES no bring-up: this check runs without the native mount, so the \
+             drivers that need its minimum-delay timer or BAR ownership do not start\n"
+        ));
+    }
     for window in &devices.unmapped {
         output::arguments(format_args!("STORAGE UNMAPPED ecam={window:x?}\n"));
     }
-    for (address, error) in &devices.failures {
-        crate::storage::report_failure(&devices, *address, error);
+    if mounted {
+        for (address, error) in &devices.failures {
+            crate::storage::report_failure(&devices, *address, error);
+        }
     }
     for (location, error) in &devices.platform_failures {
         output::arguments(format_args!("PLATFORM FAILED {location}: {error}\n"));
@@ -359,14 +374,16 @@ fn disks(machine: &mut Machine, handoff: &Handoff) -> Vec<InputDevice> {
             class[0], class[1], class[2]
         ));
     }
-    for (location, error) in &devices.device_failures {
-        output::arguments(format_args!("HOST DEVICE FAILED {location}: {error}\n"));
-    }
-    for (location, error) in &devices.usb_failures {
-        output::arguments(format_args!(
-            "{}",
-            stela_drivers::usb::xhci::failure_line(location, error)
-        ));
+    if mounted {
+        for (location, error) in &devices.device_failures {
+            output::arguments(format_args!("HOST DEVICE FAILED {location}: {error}\n"));
+        }
+        for (location, error) in &devices.usb_failures {
+            output::arguments(format_args!(
+                "{}",
+                stela_drivers::usb::xhci::failure_line(location, error)
+            ));
+        }
     }
     for (location, why) in &devices.usb_unused {
         output::arguments(format_args!("USB UNUSED {location}: {why}\n"));
@@ -374,20 +391,29 @@ fn disks(machine: &mut Machine, handoff: &Handoff) -> Vec<InputDevice> {
     for device in &devices.inputs {
         output::arguments(format_args!("INPUT {}\n", device.name()));
     }
-    let failures =
-        devices.failures.len() + devices.device_failures.len() + devices.usb_failures.len();
+    let failures = if mounted {
+        devices.failures.len() + devices.device_failures.len() + devices.usb_failures.len()
+    } else {
+        0
+    };
     machine.record(
         "storage",
-        if devices.disks.is_empty() || failures > 0 {
+        if !mounted {
+            Verdict::Skip
+        } else if devices.disks.is_empty() || failures > 0 {
             Verdict::Fail
         } else {
             Verdict::Pass
         },
-        format!(
-            "disks={} inputs={} failures={failures}",
-            devices.disks.len(),
-            devices.inputs.len()
-        ),
+        if mounted {
+            format!(
+                "disks={} inputs={} failures={failures}",
+                devices.disks.len(),
+                devices.inputs.len()
+            )
+        } else {
+            String::from("no native mount: device bring-up is the system engine's")
+        },
     );
     let (mut internal, mut tables) = (0, 0);
     for device in &mut devices.disks {
@@ -429,12 +455,18 @@ fn disks(machine: &mut Machine, handoff: &Handoff) -> Vec<InputDevice> {
     }
     machine.record(
         "gpt",
-        if internal > 0 && tables == internal {
+        if !mounted {
+            Verdict::Skip
+        } else if internal > 0 && tables == internal {
             Verdict::Pass
         } else {
             Verdict::Fail
         },
-        format!("internal NVMe/AHCI disks={internal} with a GPT={tables} (read only)"),
+        if mounted {
+            format!("internal NVMe/AHCI disks={internal} with a GPT={tables} (read only)")
+        } else {
+            String::from("no native mount: no internal disk is brought up here")
+        },
     );
     match machine.options.nor_file.clone() {
         Some((guid, path)) => {
@@ -446,7 +478,7 @@ fn disks(machine: &mut Machine, handoff: &Handoff) -> Vec<InputDevice> {
         }
         None => machine.record("log", Verdict::Skip, String::from("no --nor-file")),
     }
-    core::mem::take(&mut devices.inputs)
+    (core::mem::take(&mut devices.inputs), mounted)
 }
 
 /// Keep the output in the file at `path` on USB partition `guid`.
@@ -655,12 +687,16 @@ fn key(keyboards: &mut [InputDevice]) -> Option<u8> {
 }
 
 /// A key within `--key-seconds`, which also says whether the bars show.
-fn keyboard(machine: &mut Machine, keyboards: &mut [InputDevice]) {
+fn keyboard(machine: &mut Machine, keyboards: &mut [InputDevice], mounted: bool) {
     if keyboards.is_empty() {
         machine.record(
             "keyboard",
-            Verdict::Fail,
-            String::from("no keyboard was brought up"),
+            if mounted { Verdict::Fail } else { Verdict::Skip },
+            if mounted {
+                String::from("no keyboard was brought up")
+            } else {
+                String::from("no native mount: no USB controller is started here")
+            },
         );
         machine.record("display-seen", Verdict::Skip, String::from("no keyboard"));
         return;

@@ -92,3 +92,23 @@ To keep the picture balanced: the translator, the Metal layer, AIR→NIR, the
 xe port with shared i915 display, the ANV build rules, the Intel admission
 and the capability gate all already exist. The gap is integration and
 bring-up on real hardware, not the absence of an architecture.
+
+## `--host-check` cannot bring devices up (by construction)
+
+The host check runs `stela_drivers::probe::probe()`, the legacy entry point, which
+passes no native mount. `minimum_result` is then
+`Err(ServiceError::Unavailable)`, so every driver that needs the mount's
+minimum-delay timer, BAR ownership or IRQ routing refuses before it starts:
+xHCI, NVMe, virtio. On real hardware this showed as
+`HOST DEVICE FAILED pci=0000:00:0d.0 (USB) error=native resource service
+unavailable`.
+
+Consequences, which the check now states instead of failing:
+
+- `storage`, `gpt` and `keyboard` are `SKIP` in this lane. They are only real
+  verdicts under the system engine, which builds the native mount.
+- The on-stick boot log stops at ExitBootServices in this lane: continuing it
+  needs Stela's own block driver over the very USB controller the lane cannot
+  start.
+- A GPU verdict still works, because the census reads configuration space and
+  selection (`HOST GPU … xe will bind it`) needs no mount.

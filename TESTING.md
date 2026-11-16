@@ -104,3 +104,16 @@ executed.
    `xe` binding → BAR0 → DMA mask → firmware (GuC/HuC/GSC/DMC) load →
    GT init → DRM render node → ANV device creation → Metal device.
 5. One variable per boot. Never change several boot parameters at once.
+
+## Reading a `--host-check` result
+
+Judge the lane by what it can see: `cpu`, `tsc`, `native-memory`, `apic`,
+`interrupts`, `display` and `display-seen` are real verdicts. `storage`, `gpt`
+and `keyboard` report `SKIP no native mount…` — that is correct, not a
+regression (see `KNOWN_LIMITATIONS.md`). `log` is `SKIP` unless the check was
+given `--nor-file`.
+
+A `HOST GPU <address> <vendor>:<device>: xe will bind it` line means the vendor
+stack's admission test accepted the GPU; it does not mean a driver is bound.
+Since the on-stick log ends at ExitBootServices in this lane, PCI census and GPU
+lines only reach the log when they are printed before that point, which they are.

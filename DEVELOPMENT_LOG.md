@@ -352,3 +352,38 @@ and `intel_bluetooth`, neither of them USB.
   it" is the selection answer, not a bound device.
 - Storage, GPT, keyboard and interrupt checks reached no verdict on hardware, and
   the log could not be kept past EBS.
+
+### Session 4 addendum — the USB failure was the lane, not the device
+
+Traced `HOST DEVICE FAILED pci=0000:00:0d.0 (USB) error=native resource service
+unavailable` to its source: `stela_drivers::probe::probe()` (the legacy entry
+point, `crates/stela-drivers/src/probe.rs:1256`) calls `probe_with_provider(…,
+None, None)`, so `services` is `None`; `minimum_result` is therefore
+`Err(ServiceError::Unavailable)` (`:1676`), and `minimum_for_function!` (`:1769`)
+files that error for every driver that needs the mount's minimum-delay timer —
+xHCI, NVMe and virtio alike. The `(USB)` label comes from the function's PCI
+class, not from the USB driver. Nothing was wrong with the controller, the stick
+or the hardware: `--host-check` never gives device bring-up a mount, so it could
+never have started them, and the on-stick log can never continue past
+ExitBootServices in that lane.
+
+Fixed the reporting rather than the lane: `host_check::disks` now reads
+`Devices::native_services`, prints one explaining line
+(`HOST DEVICES no bring-up: …`), does not file those as device failures, and
+records `storage`, `gpt` and `keyboard` as `SKIP` with reasons instead of `FAIL`.
+The system engine, which builds the real mount, is unaffected.
+
+Verified in QEMU (same image, `-cpu max`, GPT test disk, `--host-check
+--deadline 120`):
+
+```
+HOST DEVICES no bring-up: this check runs without the native mount, so the drivers that need its minimum-delay timer or BAR ownership do not start
+CHECK storage SKIP no native mount: device bring-up is the system engine's
+CHECK gpt SKIP no native mount: no internal disk is brought up here
+CHECK keyboard SKIP no native mount: no USB controller is started here
+CHECK interrupts PASS one_shot=1 after 10939 us (expected 1 after 10000) periodic=100 in 100 ms
+HOST CHECK END pass=6 fail=0 skip=5
+```
+
+Before the change the same lane reported `pass=6 fail=3 skip=2` with three
+`HOST DEVICE FAILED` lines and no explanation.
