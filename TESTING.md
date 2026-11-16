@@ -75,7 +75,7 @@ LLVM + Clang development files (host has **23.1.3** ✓), SPIRV-Tools,
 | `cargo test -p stela-driver-gpu --features metal` | **ran, passed** — 639 tests, 0 failed, 1 ignored (+ 3 kbuild, 1 llvm-passes) |
 | `cargo test -p stela-driver-gpu --features xe-port,metal -- metal::intel` | **ran, passed** — 4 Intel admission tests, after two build fixes (`kbuild` gate, xe's import list). This compiles the Intel composite: xe + shared i915 display + DRM core, 352 C objects |
 | `cargo test -p stela-driver-gpu --features xe-port,metal` (all) | **ran, passed** — 654 tests, 0 failed, 1 ignored |
-| `cargo xtask gpu anv-test` | **not run** — host lacks `SPIRV-LLVM-Translator` (`llvm-spirv`), which `mesa_clc` needs; `SPIRV-Tools 2026.4.1`, glslang 16.6.0, meson 1.12.1 and libdrm 2.4.134 are present |
+| `cargo xtask gpu anv-test` | **ran, blocked**: `ANV cannot be built on this host: mesa_clc cannot be built here (Dependency "LLVMSPIRVLib" not found (tried pkg-config and cmake))` — `SPIRV-Tools 2026.4.1`, glslang 16.6.0, meson 1.12.1 and libdrm 2.4.134 are present; only SPIRV-LLVM-Translator is missing |
 | `cargo xtask gpu nvk` / `dist` (image build) | **not run** — needs LLVM for UEFI + Mesa for the image; hours of compile, ~1 GB RAM free on this machine |
 | Real-GPU dispatch on Arc 140T | **not run** |
 | Stela boot on this laptop | **not run** |

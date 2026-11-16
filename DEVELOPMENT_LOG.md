@@ -166,6 +166,20 @@ built without `nouveau-port`.
 - `e3d5ebf` docs: the eight audit documents
 - `687c7a1` feat(xe): ANV's host test covers Arrow Lake-P's 0x7d51
 
+### ANV host test — blocked, with the exact reason
+
+```
+error: ANV cannot be built on this host: mesa_clc cannot be built here
+(Dependency "LLVMSPIRVLib" not found (tried pkg-config and cmake);
+Meson's log is target/gpu/clc/meson-log.txt)
+```
+
+So the one test that would build a BRW compute pipeline and submit a
+dispatch for Arrow Lake (the `7d51` case added above) cannot run until
+SPIRV-LLVM-Translator is installed on the build host. Everything else it
+needs is present: LLVM/Clang 23.1.3, meson 1.12.1, ninja, glslang 16.6.0,
+SPIRV-Tools 2026.4.1, libdrm 2.4.134.
+
 ### Not done in this session
 
 - `cargo xtask gpu nvk` / `dist` (image build): not completed.
