@@ -714,11 +714,64 @@ impl Advertised {
     }
 }
 
+/// The `IOMFBDisplayRefresh` dictionary for a display that refreshes every
+/// `period` ticks of a `counter_hz` counter, at that one rate. The kernel's
+/// own builder of it (`IOMobileFramebufferLegacy::setDisplayRefreshProperties`
+/// 0xfffffe000adb0b58, 26A434 kernelcache) sets these six keys in this order,
+/// each a 64-bit number: an interval in 32.32 fixed-point seconds (60 Hz is
+/// 0x04444444), then the same interval in counter ticks. A fixed-rate mode
+/// has its shortest interval equal to its longest (the kernel's fixed-rate
+/// branch also sets both to one value) and no step between rates (step 0,
+/// which the kernel also sets). Core Animation reads
+/// `displayRefreshStepMachTime` when it is nonzero and otherwise
+/// `displayMinRefreshInterval` for its shortest frame interval (QuartzCore
+/// 0x18ddc4e8c), with 1/60 s when the dictionary is missing.
+pub fn display_refresh(period: u64, counter_hz: u64) -> String {
+    let seconds = (u128::from(period) << 32) / u128::from(counter_hz.max(1));
+    let seconds = u64::try_from(seconds).unwrap_or(u64::MAX);
+    let mut xml = Xml(String::new());
+    xml.raw("<dict>")
+        .int("displayMinRefreshInterval", seconds, 64)
+        .int("displayMinRefreshIntervalMachTime", period, 64)
+        .int("displayMaxRefreshInterval", seconds, 64)
+        .int("displayMaxRefreshIntervalMachTime", period, 64)
+        .int("displayRefreshStep", 0, 64)
+        .int("displayRefreshStepMachTime", 0, 64)
+        .raw("</dict>");
+    xml.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::super::scanout::PixelFormat;
     use super::*;
     use alloc::format;
+
+    #[test]
+    fn the_refresh_dictionary_has_the_kernels_keys_order_and_units() {
+        // 60 Hz on a 24 MHz counter: the kernel's own 1/60 s word.
+        assert_eq!(
+            display_refresh(400_000, 24_000_000),
+            "<dict>\
+             <key>displayMinRefreshInterval</key><integer size=\"64\">71582788</integer>\
+             <key>displayMinRefreshIntervalMachTime</key><integer size=\"64\">400000</integer>\
+             <key>displayMaxRefreshInterval</key><integer size=\"64\">71582788</integer>\
+             <key>displayMaxRefreshIntervalMachTime</key><integer size=\"64\">400000</integer>\
+             <key>displayRefreshStep</key><integer size=\"64\">0</integer>\
+             <key>displayRefreshStepMachTime</key><integer size=\"64\">0</integer>\
+             </dict>"
+        );
+        assert_eq!(71_582_788, 0x0444_4444);
+        // 144 Hz: 1/144 s in 32.32 and the counter's own period.
+        let fast = display_refresh(166_667, 24_000_000);
+        let seconds = (166_667u128 << 32) / 24_000_000;
+        assert!(fast.contains(&format!(
+            "<key>displayMinRefreshInterval</key><integer size=\"64\">{seconds}</integer>"
+        )));
+        assert!(fast.contains(
+            "<key>displayMaxRefreshIntervalMachTime</key><integer size=\"64\">166667</integer>"
+        ));
+    }
 
     #[test]
     fn a_fast_modes_rates_past_255_are_stored_with_their_offsets() {

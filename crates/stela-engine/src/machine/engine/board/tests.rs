@@ -172,7 +172,7 @@ fn ring_moves_on_and_retires_one_ahead() {
     );
     assert!(!ring.live(first));
     let third = ring.head(YOUNG);
-    let place = ring.take(YOUNG, 256, 16).unwrap();
+    let place = ring.take(YOUNG, ring.main_bytes(), 16).unwrap();
     ring.release(place);
     assert_eq!(place.part, 2);
     // Until it is retired another advance waits for the retirer.
@@ -314,7 +314,7 @@ fn a_tenured_part_is_not_chosen_the_moment_it_fills() {
     while ring.generation() < ring.holds(tenured as usize) + AGE_TURNS * 8 {
         step(YOUNG, fill(&ring, YOUNG));
     }
-    let in_flight = ring.take(TENURED, PART - 16, 16).unwrap();
+    let in_flight = ring.take(TENURED, ring.main_bytes() - 16, 16).unwrap();
     assert_eq!(in_flight.part, tenured);
     let full = ring.take(TENURED, 16, 16).unwrap_err();
     let chosen = step(TENURED, full).expect("a part chosen");

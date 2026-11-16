@@ -91,13 +91,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Clang 21
+      - name: Install Clang 21 and the GPU host tools
         run: |
-          # The kext needs upstream Clang 21 or newer for arm64e.
+          # The kext needs upstream Clang 21 or newer for arm64e. The Intel
+          # and AMD Vulkan drivers' builds run glslangValidator 12.2 or newer
+          # and mesa_clc, which links LLVM 21 and libclang-cpp 21 (and the
+          # SPIR-V libraries spirv.sh builds below).
           curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
           echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends clang-21 lld-21 llvm-21 libclang-21-dev
+          sudo apt-get install -y -q --no-install-recommends \
+            clang-21 lld-21 llvm-21 llvm-21-dev libclang-21-dev libclang-cpp21-dev \
+            glslang-tools ninja-build
           echo /usr/lib/llvm-21/bin >> "$GITHUB_PATH"
 
       - uses: actions/cache@v4
@@ -122,8 +127,10 @@ jobs:
         id: keys
         run: |
           pins="$(git ls-tree HEAD third_party | sha256sum | cut -c1-16)"
-          tools="$(printf '%s\n%s\n' "$(clang --version | head -1)" "$(rustc --version)" | sha256sum | cut -c1-16)"
+          llvm="$(clang --version | head -1)"
+          tools="$(printf '%s\n%s\n%s\n' "$llvm" "$(rustc --version)" "$(glslangValidator --version | head -1)" | sha256sum | cut -c1-16)"
           echo "nvk=$pins-$tools" >> "$GITHUB_OUTPUT"
+          echo "llvm=$(echo "$llvm" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
           # The tools' virtual environment names the image's Python.
           echo "image=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
 
@@ -132,13 +139,26 @@ jobs:
           path: .tools/gpu
           key: gpu-tools-${{ steps.keys.outputs.image }}-${{ hashFiles('xtask/src/gpu/toolchain.rs') }}
 
+      - uses: actions/cache@v4
+        id: spirv
+        with:
+          path: .tools/spirv
+          key: spirv-${{ steps.keys.outputs.image }}-${{ steps.keys.outputs.llvm }}-${{ hashFiles('.github/spirv.sh') }}
+
+      - name: SPIR-V libraries
+        run: |
+          if [[ "${{ steps.spirv.outputs.cache-hit }}" != true ]]; then
+            bash .github/spirv.sh .tools/spirv
+          fi
+          echo "PKG_CONFIG_PATH=$PWD/.tools/spirv/lib/pkgconfig" >> "$GITHUB_ENV"
+
       # Mesa and LLVM compiled for stela.efi. Only an exact key restores:
       # it covers every input of `target/gpu`.
       - uses: actions/cache@v4
         id: nvk
         with:
           path: target/gpu
-          key: nvk-${{ steps.keys.outputs.nvk }}-${{ hashFiles('xtask/src/gpu/**', 'crates/stela-driver-gpu/**', 'third_party/patches/**', 'third_party/*.sparse') }}
+          key: nvk-${{ steps.keys.outputs.nvk }}-${{ hashFiles('xtask/src/gpu/**', 'crates/stela-driver-gpu/**', 'third_party/patches/**', 'third_party/*.sparse', '.github/spirv.sh') }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -195,9 +215,14 @@ jobs:
           find third_party crates/stela-driver-gpu -path '*/.git' -prune -o -type f -print0 \
             | xargs -0 touch -h -d '2000-01-01T00:00:00Z'
 
+      # A release fails where a local build would leave out a Vulkan driver
+      # the image gives its GPUs (`released` in xtask/src/gpu/nvk.rs).
       - name: Build stela.efi
+        env:
+          STELA_RELEASE: "1"
         run: |
           cargo xtask boot build --release
+          echo "Vulkan drivers: $(paste -sd, target/gpu/nvk/vulkan-drivers)" >> "$GITHUB_STEP_SUMMARY"
           efi=target/boot/x86_64-unknown-uefi/release/stela-deploy.efi
           [[ "$(head -c 2 "$efi")" == MZ ]] || { echo "::error::$efi is not a PE image"; exit 1; }
           cp "$efi" dist/stela.efi

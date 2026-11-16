@@ -107,6 +107,13 @@ pub const SURFACE_NULL: usize = RECORD_NULL + 1;
 pub const SECONDARY_NULL: usize = SURFACE_NULL + LAYERS;
 
 /// Record offsets.
+/// The swap's first timestamp, which `IOMobileFramebufferSwapSetTimestamp`
+/// sets: libIOMobileFramebuffer's setter (0x2e49c in the library) stores
+/// kind `k` at record `+8 * (k - 1)` and that call names kind 1 alone;
+/// Core Animation gives it its frame's target time. The library converts
+/// it from absolute time to the coprocessor's clock (continuous time, the
+/// counter) through fb+0xe68.
+pub const REQUESTED: usize = 0x00;
 pub const SWAP_ID: usize = 0x98;
 /// The four layers' surface IDs (`IOSurface::getID`), which
 /// `io_fence_notify` names.
@@ -462,6 +469,9 @@ pub struct Layer {
 pub struct Submission {
     /// The record's swap id.
     pub swap_id: u32,
+    /// When the client asked for the swap to be shown ([`REQUESTED`]), in
+    /// counter ticks; 0 when it named no time.
+    pub requested: u64,
     /// The enable mask: bit `i` updates layer `i`.
     pub enabled: u32,
     /// The background color (m1n1 14.7 `bg_color`).
@@ -512,6 +522,7 @@ impl Submission {
         }
         Ok(Self {
             swap_id: u32_at(input, SWAP_ID),
+            requested: u64_at(input, REQUESTED),
             enabled,
             background: u32_at(input, BACKGROUND),
             ready: u32_at(input, READY),

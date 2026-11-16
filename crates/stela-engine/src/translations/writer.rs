@@ -49,7 +49,14 @@
 //! pack read, holds whatever it adds; and once a boot whose file held
 //! records of earlier boots, a full merge keeps [`KEPT_EIGHTHS`] of the
 //! limit, the records boots used most recently first, which leaves room for
-//! the code the boot newly compiles.
+//! the code the boot newly compiles. When that room is full too, while the
+//! file still holds records of earlier boots, a full merge runs again (at
+//! most [`FULL_REFILLS`] times a boot, and no more once one frees under a
+//! sixteenth of the limit): records this boot used are kept first, so the
+//! code it compiles replaces records no boot used since, where before the
+//! store shed everything new past the first merge for the rest of the boot
+//! (run 20261116-111302: shed 30 s after the guest started, 28.2 M compiles
+//! shed after it).
 //!
 //! What stays in the heap, beside everything the guest and the GPU need
 //! from it, the writer bounds by the heap
@@ -98,6 +105,10 @@ pub const STEP_WORK: usize = 32;
 pub const PIECE_BYTES: u64 = 512 << 10;
 /// The record bytes a step moves to the arena.
 pub const SETTLE_BYTES: usize = 4 << 20;
+/// Full merges a boot runs when its pack reached its share and the file
+/// holds records of earlier boots: each writes up to [`KEPT_EIGHTHS`] of
+/// the limit, so this bounds what the boot writes for them.
+pub const FULL_REFILLS: u8 = 2;
 /// The eighths of the limit a full merge keeps, once the file holds records
 /// of earlier boots, and the eighths the pack a boot leaves may take.
 pub const KEPT_EIGHTHS: u64 = 4;
@@ -311,6 +322,12 @@ pub struct Writer<'a> {
     shedding: bool,
     reported: u8,
     released: bool,
+    /// The store sheds because the pack reached its share; full merges
+    /// left to make room then ([`FULL_REFILLS`]), and the segment bytes
+    /// before the one under way, if it is one.
+    pack_full: bool,
+    refills: u8,
+    refilling: Option<u64>,
     /// The bytes of the segments read: records of earlier boots.
     read_bytes: u64,
     /// The bytes of the entries a segment being laid out took.
@@ -368,6 +385,9 @@ impl<'a> Writer<'a> {
             shedding: false,
             reported: 0,
             released: false,
+            pack_full: false,
+            refills: FULL_REFILLS,
+            refilling: None,
             read_bytes: segments.iter().map(|pack| pack.bytes() as u64).sum(),
             delta_bytes: 0,
             arena: file.arena,
@@ -516,6 +536,7 @@ impl<'a> Writer<'a> {
         };
         let heap_eased = heap
             .is_none_or(|Heap { total, room }| room >= total / SHED_SHARE + total / RELEASE_SHARE);
+        self.pack_full = reason == Some(ShedReason::Pack);
         let keep = reason.is_none() && heap_eased && pack < left.saturating_sub(self.limit / 16);
         if let Some(reason) = reason
             && !self.shedding
@@ -686,7 +707,8 @@ impl<'a> Writer<'a> {
     /// translation does not press, enough segments or lists.
     fn full_merge_due(&self) -> bool {
         let segments = self.count(SEGMENT_BLOB);
-        segments >= MERGE_FULL
+        self.refill_due()
+            || segments >= MERGE_FULL
             || self.segment_bytes() > self.data_bytes() / 2
             || !self.waiting.is_empty()
             || (!self.merged
@@ -696,6 +718,19 @@ impl<'a> Writer<'a> {
                 && (segments >= MERGE_AT
                     || self.count(USED_BLOB) >= MERGE_AT
                     || (self.read_bytes != 0 && self.segment_bytes() > self.kept_bytes())))
+    }
+
+    /// Whether a full merge is due to make room for new records, the pack
+    /// having reached its share: while the file holds records of earlier
+    /// boots, every segment was read, translation does not press, and the
+    /// boot has refills left.
+    fn refill_due(&self) -> bool {
+        self.pack_full
+            && self.read_bytes != 0
+            && self.refills != 0
+            && !self.partial
+            && !self.pressed
+            && self.segments.len() == self.count(SEGMENT_BLOB)
     }
 
     /// The most bytes a full merge keeps: once the file holds records of
@@ -745,6 +780,10 @@ impl<'a> Writer<'a> {
         }
         self.look(now, entries);
         if self.full_merge_due() && !self.segments.is_empty() && !self.released {
+            if self.refill_due() {
+                self.refills -= 1;
+                self.refilling = Some(self.segment_bytes());
+            }
             self.merged = true;
             // Beside the file's content, so its commit keeps that content
             // until the merged segment is whole; within its share of the
@@ -915,6 +954,12 @@ impl<'a> Writer<'a> {
             }
             Done::Merge(layout, Merging::Full) => {
                 self.stats.merges += 1;
+                // A refill that freed little finds nothing more to replace.
+                if let Some(before) = self.refilling.take()
+                    && before.saturating_sub(layout.bytes()) < self.limit / 16
+                {
+                    self.refills = 0;
+                }
                 self.arena_full = false;
                 self.merged_since_wait = !self.waiting.is_empty();
                 self.segments = if self.released {

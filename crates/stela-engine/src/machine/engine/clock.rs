@@ -41,6 +41,24 @@
 //!   its passes holds the count as a stopped holder does. Counted as a
 //!   waiting PE, the count ran on while the host kept the next owner away,
 //!   and the waiters behind it timed out with no owner recorded.
+//! - The stall limit holds for each stall on its own, but a waiter times
+//!   the whole queue ahead of it: a ticket waiter behind three PEs that
+//!   each stall just under the limit sees about 150 ms and panics at 125.
+//!   So a spin is timed too. A PE in the kernel whose WFE spins publishes
+//!   the count its spin started at (`Slot::spin`); XNU starts its own timer
+//!   after the first hundred passes, so later. Once a spin is
+//!   [`SPIN_MILLIS`] old, the count runs at most [`LEASE_MILLIS`] past any
+//!   PE with guest work's last published progress: the ceiling becomes a
+//!   lease, set ahead from the PEs' marks and renewed every half lease, so
+//!   a stalled PE, or every PE at once (a firmware SMI, a paused VM), costs
+//!   the spin at most a lease of guest time, and needs no PE to see it
+//!   stop. A waiter then sees at most [`SPIN_MILLIS`], one lease per stall
+//!   ahead of it and the time the PEs ahead actually ran. A spin ends when
+//!   its PE's guest waits or it retires [`SPIN_END_INSTRUCTIONS`] without
+//!   a pass: interrupts taken during a spin, or a lock taken again soon
+//!   after, only make it look older, which costs guest time only while a
+//!   PE stalls. On a healthy host no kernel spin lasts that long, and the
+//!   count follows the host's exactly.
 //! - A PE whose guest waits holds nothing, unless guest work comes for it
 //!   while it is out of its run loop serving the host (`Machine::serve_host`):
 //!   an interrupt or fast IPI another PE sends it, or its own timer coming
@@ -118,6 +136,26 @@ pub(super) const TICKS_PER_BLOCK: u64 = 1;
 /// marks, a few milliseconds.
 pub(super) const STALL_MILLIS: u64 = 50;
 
+/// How old a kernel spin may get before the count runs only on a lease
+/// ([`LEASE_MILLIS`]): a fifth of the ticket spinlock's 125 ms. The waiter
+/// then has 100 ms left for the PEs ahead of it, of which they need
+/// microseconds of running and a lease for each stall. XNU's ticket, spin
+/// and interlock waits all spin in WFE on their monitor; a healthy one ends
+/// in microseconds.
+pub(super) const SPIN_MILLIS: u64 = 25;
+
+/// While a spin is [`SPIN_MILLIS`] old, the furthest the count runs past
+/// the last published progress of any PE with guest work. Seven PEs ahead
+/// of a waiter stalling twice each cost it 28 ms. Longer than a running
+/// PE's gap between two progress marks; shorter than a long exit, which
+/// then holds the count for the rest.
+pub(super) const LEASE_MILLIS: u64 = 2;
+
+/// The instructions a PE retires without a pass of its spin that end the
+/// spin: more than XNU's timer interrupt path, which a spin with
+/// interrupts unmasked may take ([`TIMER_WORK`]).
+pub(super) const SPIN_END_INSTRUCTIONS: u64 = TIMER_WORK;
+
 /// The instructions a running PE retires between two progress marks
 /// ([`Clock::mark_due`]): a counter read each, every 250 blocks or so, so
 /// that even a PE at 50 us a block marks every 13 ms.
@@ -192,9 +230,13 @@ pub struct SharedClock {
     /// latest a busy PE's timer interrupt comes.
     stall: AtomicU64,
     timer_delay: AtomicU64,
+    /// [`SPIN_MILLIS`] and [`LEASE_MILLIS`] in counts.
+    spin_limit: AtomicU64,
+    lease: AtomicU64,
     /// Host counts the count lost to stalls past the limit since the last
-    /// [`Self::take_stalled`].
+    /// [`Self::take_stalled`], and the part of them a lease held.
     stalled: AtomicU64,
+    leased: AtomicU64,
     /// The offset as seeded: the count with no lag. `offset` stays at or
     /// below it, and the difference is the lag the slew repays. Written
     /// only under the sequence, as is `slewed`.
@@ -207,6 +249,10 @@ pub struct SharedClock {
     /// The count before which no running PE can look stalled
     /// ([`Self::look`]), on a line of its own.
     next_scan: Summary,
+    /// The count from which the count runs on a lease: the oldest kernel
+    /// spin's start a scan saw plus [`SPIN_MILLIS`], [`UNBOUNDED`] with
+    /// none ([`Self::spin_hold`]).
+    spin_hold: Summary,
     /// Slot loads, for the host tests.
     #[cfg(test)]
     loads: AtomicU64,
@@ -263,6 +309,9 @@ struct Slot {
     /// [`SharedClock::take_stalls`], in host counts, with the phase that
     /// took most of it in the low [`PHASE_BITS`].
     longest: AtomicU64,
+    /// The count its current spin in the kernel started at, [`IDLE`] with
+    /// none ([`Clock::spin`]).
+    spin: AtomicU64,
 }
 
 impl SharedClock {
@@ -276,15 +325,20 @@ impl SharedClock {
                 .map(|_| Slot {
                     count: AtomicU64::new(IDLE),
                     longest: AtomicU64::new(0),
+                    spin: AtomicU64::new(IDLE),
                 })
                 .collect(),
             stall: AtomicU64::new(0),
             timer_delay: AtomicU64::new(0),
+            spin_limit: AtomicU64::new(0),
+            lease: AtomicU64::new(0),
             stalled: AtomicU64::new(0),
+            leased: AtomicU64::new(0),
             target: AtomicU64::new(0),
             slewed: AtomicU64::new(0),
             repaid: AtomicU64::new(0),
             next_scan: Summary::default(),
+            spin_hold: Summary(AtomicU64::new(UNBOUNDED)),
             #[cfg(test)]
             loads: AtomicU64::new(0),
         }
@@ -327,15 +381,84 @@ impl SharedClock {
             .then(|| count.saturating_add(stall))
     }
 
+    /// The count from which the count runs on a lease, from the spins the
+    /// slots show now: the oldest start plus [`SPIN_MILLIS`]. Lowered at
+    /// once; raised only if no other scan changed it meanwhile. A spin
+    /// that starts just after its slot was read shows at the next scan, a
+    /// part of the stall limit later at most, well before it is
+    /// [`SPIN_MILLIS`] old; so a spin needs no shared write to start.
+    fn spin_hold(&self) -> u64 {
+        let seen = self.spin_hold.0.load(Ordering::Relaxed);
+        let oldest = self
+            .slots
+            .iter()
+            .map(|slot| slot.spin.load(Ordering::Relaxed))
+            .min()
+            .unwrap_or(IDLE);
+        let hold = oldest.saturating_add(self.spin_limit.load(Ordering::Relaxed));
+        if hold < seen {
+            self.spin_hold.0.fetch_min(hold, Ordering::Relaxed);
+            hold
+        } else if hold > seen {
+            match self.spin_hold.0.compare_exchange(
+                seen,
+                hold,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => hold,
+                Err(now) => now,
+            }
+        } else {
+            hold
+        }
+    }
+
+    /// Whether `ceiling` is a lease (or the count a lease starts at) that
+    /// the count at `count` is still more than half a lease from: renewing
+    /// it can wait ([`Self::look`]). A stall limit is no lease, even one
+    /// past where a lease will start: the look that sets that start must
+    /// come.
+    fn lease_far(&self, count: u64, ceiling: u64) -> bool {
+        if ceiling == UNBOUNDED
+            || count.saturating_add(self.lease.load(Ordering::Relaxed) / 2) >= ceiling
+        {
+            return false;
+        }
+        let hold = self.spin_hold.0.load(Ordering::Relaxed);
+        count >= hold || ceiling == hold
+    }
+
     /// The lowest limit of the PEs that look stalled at count `now`, and
-    /// the lowest count at which one that does not yet could.
+    /// the lowest count at which one that does not yet could. Once a spin
+    /// is [`SPIN_MILLIS`] old the limit is also a lease past every PE with
+    /// guest work's published count; the count a lease starts at is a
+    /// limit too once a scan may not come before it.
     fn scan(&self, now: u64) -> (u64, u64) {
-        let suspect = self.stall.load(Ordering::Relaxed) / SUSPECT_PARTS;
+        let hold = self.spin_hold();
+        let stall = self.stall.load(Ordering::Relaxed);
+        let suspect = stall / SUSPECT_PARTS;
+        let lease = self.lease.load(Ordering::Relaxed);
+        let leasing = now >= hold;
         // A PE that runs again later publishes a count past `now`.
         let mut next = now.saturating_add(suspect);
         let mut limit = UNBOUNDED;
+        if !leasing {
+            // Scans come a part of the limit apart, a look a publish part
+            // later at most: closer than that, the lease starts at its
+            // count even if no PE looks then, every PE being stopped.
+            let early = suspect + stall / PUBLISH_PARTS;
+            if hold <= now.saturating_add(early) {
+                limit = hold;
+            } else {
+                next = next.min(hold - early);
+            }
+        }
         for pe in 0..self.slots.len() {
             let count = self.slot(pe);
+            if leasing && count != IDLE {
+                limit = limit.min((count & !STOPPED).saturating_add(lease));
+            }
             match self.limit_of(count, now) {
                 Some(of) => limit = limit.min(of),
                 None if count != IDLE => next = next.min(count.saturating_add(suspect)),
@@ -395,6 +518,11 @@ impl SharedClock {
             }
             return;
         }
+        // A lease moves with every mark; it is renewed once a half lease,
+        // not at each look.
+        if limit != UNBOUNDED && limit > ceiling && self.lease_far(count, ceiling) {
+            return;
+        }
         self.settle(counter);
     }
 
@@ -443,6 +571,9 @@ impl SharedClock {
         let count = free.min(ceiling);
         if free > count {
             self.stalled.fetch_add(free - count, Ordering::Relaxed);
+            if ceiling >= self.spin_hold.0.load(Ordering::Relaxed) {
+                self.leased.fetch_add(free - count, Ordering::Relaxed);
+            }
             self.state
                 .offset
                 .store(count.wrapping_sub(host), Ordering::Relaxed);
@@ -510,6 +641,11 @@ impl SharedClock {
             .store(frequency * STALL_MILLIS / 1000, Ordering::Relaxed);
         self.timer_delay
             .store(frequency / TIMER_DELAY_HZ, Ordering::Relaxed);
+        self.spin_limit
+            .store(frequency * SPIN_MILLIS / 1000, Ordering::Relaxed);
+        self.lease
+            .store((frequency * LEASE_MILLIS / 1000).max(1), Ordering::Relaxed);
+        self.spin_hold.0.store(UNBOUNDED, Ordering::Relaxed);
         self.unlock(sequence);
     }
 
@@ -575,6 +711,12 @@ impl SharedClock {
         self.stalled.swap(0, Ordering::Relaxed)
     }
 
+    /// Host counts of those a lease held, for a spin [`SPIN_MILLIS`] old,
+    /// since the last call.
+    pub fn take_leased(&self) -> u64 {
+        self.leased.swap(0, Ordering::Relaxed)
+    }
+
     /// The counts in a millisecond, once seeded.
     pub(super) fn counts_per_milli(&self) -> u64 {
         self.stall.load(Ordering::Relaxed) / STALL_MILLIS
@@ -599,10 +741,17 @@ impl SharedClock {
 
     /// When a PE waiting at host counter `host` for the count to reach
     /// `count` looks again: as it does, or, while a stalled PE holds the
-    /// count below it, a stall limit later. Read outside the sequence: a stale
-    /// answer only wakes early.
+    /// count below it, a stall limit later. Below a lease, when the count
+    /// reaches the lease and a lease later at the earliest: a lease is
+    /// renewed while the PEs run, so it must not delay the wait's own
+    /// deadline. Read outside the sequence: a stale answer only wakes early.
     fn wake_at(&self, count: u64, host: u64) -> u64 {
-        if count > self.state.ceiling.load(Ordering::Acquire) {
+        let ceiling = self.state.ceiling.load(Ordering::Acquire);
+        if count > ceiling {
+            if ceiling >= self.spin_hold.0.load(Ordering::Relaxed) {
+                let lease = self.lease.load(Ordering::Relaxed);
+                return self.host_deadline(ceiling).max(host.saturating_add(lease));
+            }
             return host.saturating_add(self.stall.load(Ordering::Relaxed).max(1));
         }
         self.host_deadline(count)
@@ -690,6 +839,17 @@ struct Attachment {
     seen: Seen,
     timers: TimerGate,
     progress: Progress,
+    /// Its spin in the kernel, while its slot shows one
+    /// ([`Clock::spin`]).
+    spin: Option<Spin>,
+}
+
+/// A PE's spin in the kernel: the count it started at, and the
+/// instructions retired at its last pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Spin {
+    since: u64,
+    retired: u64,
 }
 
 /// A running PE's last progress mark ([`Clock::mark`]).
@@ -788,6 +948,7 @@ impl Clock {
             seen,
             timers: TimerGate::default(),
             progress: Progress::default(),
+            spin: None,
         });
         self.publish_state();
     }
@@ -939,6 +1100,7 @@ impl Clock {
         {
             self.mark_ending(&mut counter, retired, phases, Mark::Ends);
         }
+        self.end_spin();
         if let Some(attachment) = &mut self.shared {
             attachment.idle = true;
             let clock = &attachment.clock;
@@ -994,12 +1156,57 @@ impl Clock {
     }
 
     /// The running PE's WFE spins on its Exclusives monitor, a pass of its
-    /// wait at `retired` instructions: it has guest work, and the pass is
-    /// progress as a block it ran would be, though it retires nothing
-    /// (`clock`). A PE that was idle has guest work from now on.
-    pub(super) fn spin(&mut self, mut counter: impl Counter, retired: u64, phases: Option<Phases>) {
+    /// wait at `retired` instructions, `at_el0` or in the kernel: it has
+    /// guest work, and the pass is progress as a block it ran would be,
+    /// though it retires nothing (`clock`). A PE that was idle has guest
+    /// work from now on. In the kernel, the first pass of a spin publishes
+    /// the count it starts at, which XNU's lock timeouts count from later
+    /// ([`SPIN_MILLIS`]); at EL0 nothing times it.
+    pub(super) fn spin(
+        &mut self,
+        mut counter: impl Counter,
+        retired: u64,
+        phases: Option<Phases>,
+        at_el0: bool,
+    ) {
         self.busy(&mut counter, retired, phases);
+        if let Some(attachment) = &mut self.shared
+            && !at_el0
+        {
+            match &mut attachment.spin {
+                Some(spin) => spin.retired = retired,
+                None => {
+                    let (since, _) = attachment.clock.read(&mut counter);
+                    attachment.clock.slots[attachment.pe]
+                        .spin
+                        .store(since, Ordering::Relaxed);
+                    attachment.spin = Some(Spin { since, retired });
+                }
+            }
+        }
         self.mark_ending(counter, retired, phases, Mark::Spin);
+    }
+
+    /// The count the running PE's spin in the kernel started at, while it
+    /// spins ([`Self::spin`]).
+    #[cfg(test)]
+    pub(super) fn spin_started(&self) -> Option<u64> {
+        self.shared
+            .as_ref()
+            .and_then(|attachment| attachment.spin)
+            .map(|spin| spin.since)
+    }
+
+    /// The running PE's spin ends: its guest waits, or it ran on without a
+    /// pass ([`SPIN_END_INSTRUCTIONS`]).
+    fn end_spin(&mut self) {
+        if let Some(attachment) = &mut self.shared
+            && attachment.spin.take().is_some()
+        {
+            attachment.clock.slots[attachment.pe]
+                .spin
+                .store(IDLE, Ordering::Relaxed);
+        }
     }
 
     /// [`Self::mark`] for what `mark` stands for: with the gap reported even
@@ -1023,6 +1230,16 @@ impl Clock {
             return;
         }
         let ran = mark == Mark::Spin || retired != progress.retired;
+        if mark == Mark::Run
+            && attachment
+                .spin
+                .is_some_and(|spin| retired.saturating_sub(spin.retired) >= SPIN_END_INSTRUCTIONS)
+        {
+            attachment.spin = None;
+            clock.slots[attachment.pe]
+                .spin
+                .store(IDLE, Ordering::Relaxed);
+        }
         if ran || mark == Mark::Ends {
             // Its first mark since it attached starts the first gap.
             if progress.host != 0 {
@@ -1049,6 +1266,11 @@ impl Clock {
         if ran {
             clock.publish(attachment.pe, count);
             progress.published = count;
+        }
+        // Under a lease every mark publishes, so that the lease follows the
+        // PEs, but only those near its end look to renew it.
+        if clock.lease_far(count, ceiling) {
+            return;
         }
         clock.look(&mut counter);
     }

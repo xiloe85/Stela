@@ -721,12 +721,29 @@ impl<H: Host, D: Devices> Machine<H, D> {
         retire: bool,
     ) -> Result<NativeCode, InstallError> {
         let stream = core::mem::replace(&mut self.install_stream, board::YOUNG);
+        let home = self.install_home.take();
         let code = Arc::clone(&self.code);
         let Some(arena) = &code.arena else {
             return self.host.install(bytes);
         };
-        if bytes.len() > arena.part_bytes {
+        if bytes.len() > arena.ring.main_bytes() {
             return Err(InstallError::Full);
+        }
+        // A thunk or tail of a block of a full part: in that part's late
+        // room, so the jump into it pins no other part.
+        if let Some(part) = home.and_then(|site| arena.part_of(site as usize))
+            && arena.ring.open_part(stream) != Some(part)
+            && let Some(place) = arena.ring.take_late(part, bytes.len(), 16)
+        {
+            let address = arena.address(place);
+            arena.write(address, bytes);
+            self.host.serialize_code();
+            if retire {
+                self.held_places.push(place);
+            } else {
+                arena.ring.release(place);
+            }
+            return Ok(NativeCode(address));
         }
         #[cfg(debug_assertions)]
         self.assert_portable(bytes);
@@ -893,15 +910,31 @@ impl<H: Host, D: Devices> Machine<H, D> {
         }
     }
 
-    /// A fetch found block `slot`: its part counts an entry, for the choice
-    /// of the tenured part to go ([`board::Ring::entered`]). The PE keeps
-    /// its counts and adds them to the ring's every [`ENTERED_BATCH`]
-    /// fetches, before each install (where the ring chooses) and when it
-    /// leaves its run loop: the hottest part's count is one line every PE's
-    /// fetches would write. The choice needs only the parts' order by
-    /// heat, which a batch of at most that many fetches per PE leaves.
+    /// A fetch found block `slot`: its part counts one entry, for the
+    /// choice of the tenured part to go ([`board::Ring::entered_by`]).
     pub(super) fn entered(&mut self, slot: usize) {
-        let part = self.code.blocks[slot].part;
+        self.heat(slot, 1);
+    }
+
+    /// Block `slot` was entered about `weight` times: once for a fetch the
+    /// engine made, and for a sampled native run that stopped in it the
+    /// transfers one sample stands for ([`Self::sampled_budget`]). Chained
+    /// native code reaches the engine about once in
+    /// [`super::CHAIN_LIMIT`] transfers, so fetches alone ranked a part of
+    /// hot chained code (an app's frameworks) below one of code that exits
+    /// at every block (the kernel's), and the ring took the hot part away.
+    ///
+    /// The PE keeps its counts and adds them to the ring's every
+    /// [`ENTERED_BATCH`] entries, before each install (where the ring
+    /// chooses) and when it leaves its run loop: the hottest part's count
+    /// is one line every PE's fetches would write. The choice needs only
+    /// the parts' order by heat, which a batch of at most that many entries
+    /// per PE leaves.
+    pub(super) fn heat(&mut self, slot: usize, weight: u64) {
+        let Some(block) = self.code.blocks.get(slot) else {
+            return;
+        };
+        let part = block.part;
         if part == board::NO_PART {
             return;
         }
@@ -909,7 +942,7 @@ impl<H: Host, D: Devices> Machine<H, D> {
         if self.entered_pending.len() <= part {
             self.entered_pending.resize(part + 1, 0);
         }
-        self.entered_pending[part] += 1;
+        self.entered_pending[part] += weight;
         self.entered_total += 1;
         if self.entered_total >= ENTERED_BATCH {
             self.flush_entered();
@@ -952,6 +985,23 @@ impl<H: Host, D: Devices> Machine<H, D> {
         } else {
             board::YOUNG
         }
+    }
+
+    /// Whether the ring took the block of `pc`, `physical` and `variant`
+    /// away within its tenure age ([`churn::Churn::promotes`]), as
+    /// [`Self::stream_for`] finds, without counting a promotion.
+    pub(super) fn ring_took(&mut self, pc: u64, physical: u64, variant: super::Variant) -> bool {
+        let id = self.variant_id(variant);
+        let Some(arena) = &self.code.arena else {
+            return false;
+        };
+        let ring = &arena.ring;
+        ring.young_parts != 0
+            && self.code.ghosts.promotes(
+                churn::identity(pc, physical, id.0),
+                ring.generation(),
+                ring.parts,
+            )
     }
 
     /// The ring's current generation and parts, or zeros without a ring.

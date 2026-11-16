@@ -1,6 +1,7 @@
 //! Mesa's Vulkan drivers for `stela.efi`: NVK with NAK, and ANV with BRW and
 //! RADV with ACO when the build host has the tools their builds run
-//! (`clc.rs`).
+//! (`clc.rs`). A release build (`STELA_RELEASE`) fails instead of leaving out
+//! a driver the image gives its GPUs.
 //!
 //! Meson configures Mesa for `sysroot`'s machine, the same from every build
 //! host, which leaves its generated sources and its compile plan. This task
@@ -84,6 +85,10 @@ pub(super) struct Driver {
     /// Whether its build runs the host tools (`clc.rs`): its internal
     /// kernels are OpenCL C and its libraries GLSL.
     host_tools: bool,
+    /// Whether a release image must hold it: true once its GPU stack gives
+    /// it to its GPUs (`stela-driver-gpu/src/stack.rs`), as an image
+    /// without it then draws nothing on them. Change both together.
+    released: bool,
     /// One of its own units, whose flags its stand-ins compile with.
     pub(super) model: &'static str,
     /// Its stand-ins and driver-internal calls, under `compat/mesa`.
@@ -159,6 +164,7 @@ const NVK: Driver = Driver {
     renamed: &[],
     options: &[],
     host_tools: false,
+    released: true,
     model: "nvk_query_pool.c",
     stand_ins: &[
         "nvkcl",
@@ -186,6 +192,8 @@ const ANV: Driver = Driver {
     renamed: &[],
     options: &ANV_OPTIONS,
     host_tools: true,
+    // Intel's stack gives no Vulkan driver yet.
+    released: false,
     model: "anv_util.c",
     stand_ins: &["anv_nir_options"],
     libraries: &[],
@@ -209,6 +217,8 @@ pub(super) const RADV: Driver = Driver {
     )],
     options: &["-Damd-use-llvm=false"],
     host_tools: true,
+    // AMD's stack gives no Vulkan driver yet.
+    released: false,
     model: "radv_query.c",
     stand_ins: &["radv_nir_options"],
     libraries: &[&LIBDRM_AMDGPU],
@@ -425,13 +435,35 @@ pub(super) struct Choice {
 }
 
 impl Choice {
-    /// Every driver, given what [`super::clc::tools`] found; the reason a
-    /// driver is left out is printed once.
-    fn new(tools: std::result::Result<super::clc::Tools, String>) -> Self {
+    /// [`DRIVERS`], given what [`super::clc::tools`] found and whether this
+    /// is a release build.
+    fn new(tools: std::result::Result<super::clc::Tools, String>, release: bool) -> Result<Self> {
+        Self::of(&DRIVERS, tools, release)
+    }
+
+    /// Every driver of `drivers`, or without the host tools those that need
+    /// none: the reason each is left out is printed once. A release build
+    /// fails instead when one left out is [`Driver::released`].
+    fn of(
+        drivers: &[&'static Driver],
+        tools: std::result::Result<super::clc::Tools, String>,
+        release: bool,
+    ) -> Result<Self> {
         let tools = match tools {
             Ok(tools) => Some(tools),
             Err(reason) => {
-                for driver in DRIVERS.iter().filter(|driver| driver.host_tools) {
+                let left_out = || drivers.iter().filter(|driver| driver.host_tools);
+                let required: Vec<&str> = left_out()
+                    .filter(|driver| driver.released)
+                    .map(|driver| driver.name)
+                    .collect();
+                ensure!(
+                    !release || required.is_empty(),
+                    "a release image must hold Vulkan driver {}, which this host cannot build: \
+                     {reason}",
+                    required.join(" and ")
+                );
+                for driver in left_out() {
                     println!(
                         "Vulkan driver {} is not built: {reason}. Its GPUs show only frames \
                          another GPU draws.",
@@ -441,11 +473,12 @@ impl Choice {
                 None
             }
         };
-        let drivers = DRIVERS
-            .into_iter()
+        let drivers = drivers
+            .iter()
+            .copied()
             .filter(|driver| tools.is_some() || !driver.host_tools)
             .collect();
-        Self { drivers, tools }
+        Ok(Self { drivers, tools })
     }
 
     /// Mesa's Meson arguments for these drivers, after [`OPTIONS`].
@@ -1264,7 +1297,10 @@ pub fn build(jobs: u16) -> Result<()> {
     let _ = fs::remove_file(&linked);
     super::llvm::build(&toolchain, jobs, false)?;
     let sysroot = Sysroot::build(&toolchain, &directory, jobs)?;
-    let choice = Choice::new(super::clc::tools(&host, jobs)?);
+    let choice = Choice::new(
+        super::clc::tools(&host, jobs)?,
+        crate::tools::release_build(),
+    )?;
     setup(&toolchain, &sysroot, &directory, &build, &path, &choice)?;
     generate(&sysroot, &build, &path, &toolchain.libclang)?;
     let libc = gpu().join("compat/libc");
@@ -1403,7 +1439,7 @@ mod tests {
     /// and whose libraries Meson links whole are linked whole.
     #[test]
     fn the_drivers_follow_the_host_tools() {
-        let without = Choice::new(Err("no glslangValidator on PATH".to_owned()));
+        let without = Choice::new(Err("no glslangValidator on PATH".to_owned()), false).unwrap();
         assert_eq!(without.drivers.len(), 1);
         assert_eq!(without.drivers[0].name, "nouveau");
         assert!(
@@ -1423,7 +1459,7 @@ mod tests {
             programs: vec!["/build/mesa_clc".into(), "/build/vtn_bindgen2".into()],
             glslang: ("/usr/bin/glslangValidator".into(), "16.2.0".to_owned()),
         };
-        let with = Choice::new(Ok(tools));
+        let with = Choice::new(Ok(tools), false).unwrap();
         assert_eq!(
             with.drivers
                 .iter()
@@ -1481,6 +1517,32 @@ mod tests {
         assert!(!with.linked_whole("src/amd/compiler/libaco.a.p/aco_ir.cpp.o"));
     }
 
+    /// A release build without the host tools fails, naming the driver its
+    /// image must hold and why it cannot be built; another build leaves the
+    /// driver out, and a release leaves out one its image does not give.
+    #[test]
+    fn a_release_fails_without_a_driver_it_must_hold() {
+        const GIVEN: Driver = Driver {
+            released: true,
+            ..RADV
+        };
+        let missing = || Err("no glslangValidator on PATH".to_owned());
+        let error = Choice::of(&[&NVK, &ANV, &GIVEN], missing(), true)
+            .err()
+            .expect("a release without RADV")
+            .to_string();
+        assert_eq!(
+            error,
+            "a release image must hold Vulkan driver amd, which this host cannot build: \
+             no glslangValidator on PATH"
+        );
+        let local = Choice::of(&[&NVK, &ANV, &GIVEN], missing(), false).unwrap();
+        assert_eq!(local.drivers.len(), 1);
+        let release = Choice::of(&[&NVK, &ANV], missing(), true).unwrap();
+        assert_eq!(release.drivers[0].name, "nouveau");
+        assert_eq!(release.drivers.len(), 1);
+    }
+
     /// Two drivers' units defining one symbol, or a driver without its
     /// entry, stop the build with the names.
     #[test]
@@ -1509,10 +1571,14 @@ mod tests {
             error.contains("define no anv_icdGetInstanceProcAddr"),
             "{error}"
         );
-        let choice = Choice::new(Ok(super::super::clc::Tools {
-            programs: Vec::new(),
-            glslang: ("glslangValidator".into(), "16.2.0".to_owned()),
-        }));
+        let choice = Choice::new(
+            Ok(super::super::clc::Tools {
+                programs: Vec::new(),
+                glslang: ("glslangValidator".into(), "16.2.0".to_owned()),
+            }),
+            false,
+        )
+        .unwrap();
         let object = Path::new("/o/src_intel_vulkan_libanv_common_a_p_anv_instance_c_o.o");
         assert_eq!(choice.owner_of_object(object).unwrap().name, "intel");
         let object = Path::new("/o/src_amd_vulkan_libvulkan_radeon_so_p_radv_instance_c_o.o");

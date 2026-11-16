@@ -212,6 +212,13 @@ pub trait Translations {
     fn kept_pages(&mut self) -> Option<usize> {
         None
     }
+    /// The bytes of stored forms the board keeps for blocks compiled at a
+    /// second address or compiled again after the ring took them away (its
+    /// rebase entries), when the store sizes them (a fixed bound
+    /// otherwise).
+    fn kept_entry_bytes(&mut self) -> Option<usize> {
+        None
+    }
     /// The page keys the board's PEs keep in all, when the store sizes them
     /// ([`super::known_keys::MAX_SLOTS`] at most).
     fn known_pages(&mut self) -> Option<usize> {
@@ -584,6 +591,13 @@ impl<H: Host, D: Devices> Machine<H, D> {
             .translations()
             .and_then(|translations| translations.known_pages())
             .unwrap_or(super::known_keys::DEFAULT_SLOTS);
+        if let Some(bytes) = self
+            .host
+            .translations()
+            .and_then(|translations| translations.kept_entry_bytes())
+        {
+            self.code.rebases.set_bound(bytes);
+        }
     }
 
     /// Let the least recently used quarter of the kept pages go, at least

@@ -9,8 +9,12 @@ repository = "https://github.com/tylertms/Stela"
 rust-version = "1.99"
 build = "build.rs"
 
-# A workspace of none: this crate and the ones it names build only for
-# `stela.efi`, from sources `cargo xtask gpu nvk` generates.
+# A workspace of its own, holding the crates under it that it names: they
+# build only for `stela.efi`, from sources `cargo xtask gpu nvk` generates.
+# Without this table Cargo searches past the root's `exclude` for an outer
+# workspace, and a checkout nested in another, such as a git worktree inside
+# the main checkout, finds that checkout's root and refuses the package.
+[workspace]
 
 [dependencies]
 nak = { package = "stela-mesa-nak", path = "nak" }

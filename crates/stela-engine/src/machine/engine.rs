@@ -745,9 +745,9 @@ pub struct Machine<H: Host, D: Devices> {
     /// (a syscall stub, the kernel's ERET) would have each exit write its
     /// record's line.
     exit_pending: [PendingExits; PENDING_EXITS],
-    /// Fetches of blocks of each ring part not yet added to the ring's
-    /// shared count of the part, and their sum ([`Self::entered`]).
-    entered_pending: Vec<u32>,
+    /// Entries of blocks of each ring part not yet added to the ring's
+    /// shared count of the part ([`Self::heat`]), and how many were noted.
+    entered_pending: Vec<u64>,
     entered_total: u32,
     /// Device accesses by physical address: the registers the guest reads
     /// and writes most and, under step timing, the costliest
@@ -810,6 +810,10 @@ pub struct Machine<H: Host, D: Devices> {
     /// ([`board::YOUNG`] unless its caller says otherwise; each install
     /// takes it back to young).
     install_stream: usize,
+    /// The site the code [`Self::install_native`] installs next serves: a
+    /// thunk or tail of a block of a full part goes in that part's late
+    /// room ([`board::Ring::take_late`]). Taken by the install.
+    install_home: Option<u64>,
     /// The ring places the block install under way took, held until it
     /// publishes ([`Self::install_native`], [`Self::release_places`]).
     held_places: Vec<board::Place>,
@@ -1380,6 +1384,7 @@ impl<H: Host, D: Devices> Machine<H, D> {
             wkdm_buffers: None,
             install_causes: InstallCauses::default(),
             install_stream: board::YOUNG,
+            install_home: None,
             held_places: Vec::new(),
             census: None,
             native_failure: None,

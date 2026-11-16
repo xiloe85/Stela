@@ -824,6 +824,12 @@ impl Hub {
         self.clock.take_stalled()
     }
 
+    /// Host counts of those a lease held while a kernel spin was old,
+    /// since the last call ([`SharedClock::take_leased`]).
+    pub fn clock_leased(&self) -> u64 {
+        self.clock.take_leased()
+    }
+
     /// Host counts the count now lags the host's by, and the counts the
     /// slew repaid since the last call ([`SharedClock::lag`],
     /// [`SharedClock::take_repaid`]).

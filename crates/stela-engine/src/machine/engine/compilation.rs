@@ -806,7 +806,14 @@ impl<H: Host, D: Devices> Machine<H, D> {
             }
             // The same page content, compiled at another address of this
             // boot: its kept entry, rebased to this page.
-            match self.code.rebases.look(key, offset as u16, context, pc) {
+            // A block the ring took away and the guest runs again: its
+            // form is kept, and its next return relocated from it.
+            let again = self.ring_took(pc, physical, variant);
+            match self
+                .code
+                .rebases
+                .look(key, offset as u16, context, pc, again)
+            {
                 super::rebase::Found::Entry(entry) => {
                     if entry.input.len() > available && !whole {
                         return Ok(None);
@@ -1351,6 +1358,8 @@ impl<H: Host, D: Devices> Machine<H, D> {
     /// Install `bytes` of a block, reclaiming the arena's oldest part
     /// when it is full.
     fn install_code(&mut self, bytes: &[u8]) -> Result<NativeCode, Stop> {
+        // A block's code takes its generation's open part.
+        self.install_home = None;
         match self.install_native(bytes, true) {
             Ok(code) => Ok(code),
             Err(InstallError::Full) => {
@@ -1512,6 +1521,7 @@ impl<H: Host, D: Devices> Machine<H, D> {
             }
         };
         self.install_stream = self.stream_at(code.0 as u64);
+        self.install_home = Some(code.0 as u64);
         let installed = self.install_native(&thunk.code, true).ok()?;
         self.profile_code(
             installed,
@@ -1728,6 +1738,7 @@ impl<H: Host, D: Devices> Machine<H, D> {
         thunk: x86_64_pointer::Thunk,
     ) -> Option<Successor> {
         self.install_stream = self.stream_at(code.0 as u64);
+        self.install_home = Some(code.0 as u64);
         let installed = self.install_native(&thunk.code, true).ok()?;
         self.profile_code(installed, thunk.code.len(), step_timing::CodeRegion::Other);
         let site = code.0 as u64 + site as u64;

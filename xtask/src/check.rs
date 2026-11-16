@@ -285,3 +285,35 @@ fn buffered(command: &mut Command) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, path::Path};
+
+    /// The root excludes each package formatted apart, so Cargo searches
+    /// above it for a workspace: past the checkout, into an outer checkout
+    /// that holds a worktree, unless a manifest below the root has one.
+    #[test]
+    fn packages_formatted_apart_have_a_workspace_below_the_root() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask lives in the checkout");
+        for manifest in FORMATTED_APART {
+            let workspace = root
+                .join(manifest)
+                .ancestors()
+                .skip(1)
+                .take_while(|directory| *directory != root)
+                .map(|directory| directory.join("Cargo.toml"))
+                .find(|candidate| {
+                    fs::read_to_string(candidate)
+                        .is_ok_and(|text| text.lines().any(|line| line.trim() == "[workspace]"))
+                });
+            assert!(
+                workspace.is_some(),
+                "{manifest} has no [workspace] at or above it below the root"
+            );
+        }
+    }
+}

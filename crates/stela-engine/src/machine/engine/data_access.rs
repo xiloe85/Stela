@@ -232,7 +232,8 @@ impl<H: Host, D: Devices> Machine<H, D> {
         // A call from EL0 holds no lock the kernel times, so the count
         // need not wait for it: a compile or a GPU wait can take
         // milliseconds. Any other may hold one: the count waits for it
-        // once it has been stopped `clock::STALL_MILLIS`.
+        // once it has been stopped `clock::STALL_MILLIS`, or
+        // `clock::LEASE_MILLIS` while a kernel spin is old.
         let at_el0 = self.cpu.pstate.el == 0;
         let released = self.clock.leave(|| self.host.counter(), work, at_el0);
         let mut caller = caller::CallerSpace {

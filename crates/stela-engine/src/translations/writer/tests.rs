@@ -1185,3 +1185,83 @@ fn a_full_arena_leaves_the_rest_in_the_heap_and_sheds_nothing() {
     run.stop(&mut disk).unwrap();
     assert_eq!(keys(&disk.bytes), added);
 }
+
+/// A boot over a pack of an earlier boot's 600 pages that uses 100 of them
+/// and compiles 400 new ones, allowed `refills` full merges once its pack
+/// reaches its share: the new pages, used pages, unused earlier pages and
+/// full merges in the file it leaves.
+fn boot_compiling_past_its_share(refills: u8) -> (usize, usize, usize, u64) {
+    const ENTRY: usize = 4 << 10;
+    let record_bytes = {
+        let mut record = Record::new(translator_id(), page_key(0));
+        record.insert(entry(0, 0, ENTRY));
+        record.encode().len() as u64 + 56
+    };
+    let limit = 1000 * record_bytes;
+    let mut disk = Disk::new(DATA_START + 8 * limit.div_ceil(journal::ALIGN) * journal::ALIGN);
+    disk.track = false;
+    let mut arena = vec![0u8; limit as usize];
+    let mut file: File<'_> = load(&disk.bytes.clone(), limit);
+    file.arena = Arena::new(&mut arena);
+    let mut run = Run::new(file, 1);
+    run.boot.entry_bytes = ENTRY;
+    run.boot.bound = 200;
+    for chunk in (0..600).collect::<Vec<u32>>().chunks(50) {
+        for &page in chunk {
+            run.boot.add_page(page);
+        }
+        run.run(&mut disk, 2).unwrap();
+    }
+    run.run(&mut disk, 2 * FIRST_DELTA_SECONDS).unwrap();
+    run.stop(&mut disk).unwrap();
+    drop(run);
+    let file = load(&disk.bytes.clone(), limit);
+    let read: u64 = file.segments.iter().map(|pack| pack.bytes() as u64).sum();
+    let mut arena = vec![0u8; (limit - read) as usize];
+    let mut file: File<'_> = file;
+    file.arena = Arena::new(&mut arena);
+    let mut run = Run::new(file, 2);
+    run.writer.refills = refills;
+    run.boot.found = (0..100).map(page_key).collect();
+    run.boot.entry_bytes = ENTRY;
+    run.boot.bound = 200;
+    let fresh: Vec<u32> = (10_000..10_400).collect();
+    for chunk in fresh.chunks(50) {
+        for &page in chunk {
+            run.boot.add_page(page);
+        }
+        run.run(&mut disk, 2).unwrap();
+    }
+    run.run(&mut disk, 3 * FIRST_DELTA_SECONDS).unwrap();
+    let merges = run.writer.stats().merges;
+    run.stop(&mut disk).unwrap();
+    let kept = keys(&disk.bytes);
+    let kept_of = |pages: &mut dyn Iterator<Item = u32>| {
+        pages.filter(|&page| kept.contains(&page_key(page))).count()
+    };
+    let left = load(&disk.bytes.clone(), limit);
+    let left: u64 = left.segments.iter().map(|pack| pack.bytes() as u64).sum();
+    assert!(left <= limit / 8 * LEFT_EIGHTHS, "left {left} of {limit}");
+    (
+        kept_of(&mut fresh.iter().copied()),
+        kept_of(&mut (0..100)),
+        kept_of(&mut (100..600)),
+        merges,
+    )
+}
+
+/// Once the pack reaches its share, a full merge lets the earlier pages the
+/// boot did not use go and its new ones are kept; before (no refill), the
+/// store shed every new page past the first merge's room.
+#[test]
+fn a_full_pack_replaces_records_no_boot_used_since_with_new_ones() {
+    let before = boot_compiling_past_its_share(0);
+    let now = boot_compiling_past_its_share(FULL_REFILLS);
+    std::println!("REFILL before new/used/unused/merges={before:?} now={now:?}");
+    let (new, used, unused, merges) = now;
+    assert_eq!(used, 100);
+    assert_eq!(new, 400, "{now:?}");
+    assert!(before.0 < new, "{before:?}");
+    assert!(unused < before.2, "{before:?} {now:?}");
+    assert!(merges <= before.3 + u64::from(FULL_REFILLS));
+}

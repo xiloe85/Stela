@@ -1771,7 +1771,7 @@ fn a_block_whose_thunk_fills_its_part_is_published_in_a_part_that_stays() {
         turn(ring, &grace, board::YOUNG);
     }
     // All of the tenured part but the block's bytes is taken.
-    let block_at = arena.part_bytes - block_bytes.next_multiple_of(16);
+    let block_at = ring.main_bytes() - block_bytes.next_multiple_of(16);
     let filler = ring.take(board::TENURED, block_at, 16).expect("room");
     ring.release(filler);
     // The ring took the block lately: it is compiled tenured.
@@ -1867,4 +1867,67 @@ fn a_block_whose_part_is_chosen_before_it_publishes_is_installed_again() {
         "the block installed again is the one indexed"
     );
     assert_eq!(live_codes(&machine), [block.code.0]);
+}
+
+/// Without step timing, one native run in `HEAT_SAMPLE_EVERY` draws its
+/// budget: one that runs out stops at a uniformly chosen transfer and adds
+/// the transfers one sample stands for to its block's part, where the
+/// engine's fetches add one each. Chained code that reaches the engine
+/// once a run so outweighs code that exits at every block, by the
+/// transfers it makes.
+#[test]
+fn a_sampled_native_run_heats_the_part_it_stops_in() {
+    use super::super::{NativeExit, chain::ChainControl, step_timing};
+    use stela_compiler::block::ExitKind;
+    let mut memory = vec![0u8; WINDOW];
+    let mut machine = arena_machine_of(&[ADD, 0x1400_0002, 0, ADD, 0x17ff_fffc], &mut memory);
+    let base = machine.cpu.pc;
+    let direct = |next_pc| NativeExit::Exit {
+        next_pc,
+        kind: ExitKind::Direct as u64,
+    };
+    machine.slice_end = u64::MAX;
+    machine.block_limit = u64::MAX;
+    machine.host.exits = vec![direct(base + 12), direct(base)];
+    machine.step().unwrap();
+    machine.step().unwrap();
+    machine.flush_entered();
+    let arena = machine.code.arena.as_ref().expect("an arena");
+    let part = arena
+        .part_of(machine.code.blocks[1].code.0)
+        .expect("code in the window");
+    let before = arena.ring.entered_count(part);
+    let runs = 2 * step_timing::HEAT_SAMPLE_EVERY;
+    for _ in 0..runs {
+        let next = if machine.cpu.pc == base {
+            base + 12
+        } else {
+            base
+        };
+        let current = machine.chain.snapshot();
+        // Every run spends its budget and stops in block 1.
+        machine.host.chained = Some((
+            machine.chain.address() as *mut ChainControl,
+            ChainControl {
+                budget: u64::MAX,
+                block: 1,
+                ..current
+            },
+        ));
+        machine.host.exits = vec![direct(next)];
+        machine.step().unwrap();
+    }
+    machine.flush_entered();
+    assert!(
+        !machine.has_hot_samples(),
+        "hot blocks only under step timing"
+    );
+    let arena = machine.code.arena.as_ref().expect("an arena");
+    let weight = u64::from(step_timing::HEAT_SAMPLE_EVERY) * step_timing::HOT_SAMPLE_SPAN;
+    let heat = arena.ring.entered_count(part) - before;
+    // Two samples, and at most a fetch a run.
+    assert!(
+        (2 * weight..=2 * weight + u64::from(runs)).contains(&heat),
+        "{heat}"
+    );
 }

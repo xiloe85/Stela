@@ -701,6 +701,7 @@ impl<H: Host, D: Devices> Machine<H, D> {
             _ => transition::exception_return_thunk(pc_at, &TRANSITIONS, ending),
         };
         self.install_stream = self.stream_at(code.0 as u64);
+        self.install_home = Some(code.0 as u64);
         let installed = self.install_native(&thunk.code, true).ok()?;
         self.profile_code(installed, thunk.code.len(), step_timing::CodeRegion::Other);
         let site = code.0 as u64 + site as u64;

@@ -8,7 +8,8 @@ impl<H: Host, D: Devices> Machine<H, D> {
     /// time, so a serialized count does not advance across it. A parallel
     /// PE's count is the host's: stopped in the kernel, where it may hold a
     /// lock another PE times, the count waits for it only once it has been
-    /// stopped `clock::STALL_MILLIS`; at EL0 it holds no such lock.
+    /// stopped `clock::STALL_MILLIS` (`clock::LEASE_MILLIS` while a kernel
+    /// spin is old); at EL0 it holds no such lock.
     pub fn exclude_host_time<T>(&mut self, work: impl FnOnce(&mut D) -> T) -> T {
         let progress = self.work();
         let at_el0 = self.cpu.pstate.el == 0;
@@ -271,19 +272,26 @@ impl<H: Host, D: Devices> Machine<H, D> {
         self.dynamic_samples.clear();
     }
 
-    /// The transfer budget of the next native run: `budget`, or under step
-    /// timing for one run in [`step_timing::HOT_SAMPLE_EVERY`] a uniform draw
-    /// from 1..=[`step_timing::HOT_SAMPLE_SPAN`] when that is smaller, with
-    /// whether the run is sampled ([`step_timing::HotBlocks`]).
+    /// The transfer budget of the next native run: `budget`, or for one run
+    /// in [`Self::sample_period`] a uniform draw from
+    /// 1..=[`step_timing::HOT_SAMPLE_SPAN`] when that is smaller, with
+    /// whether the run is sampled. A sampled run whose budget runs out stops
+    /// at a uniformly chosen one of its transfers: the ring's heat of the
+    /// part it stopped in ([`Self::heat`]) and, under step timing, the hot
+    /// blocks ([`step_timing::HotBlocks`]).
     pub(super) fn sampled_budget(&mut self, budget: u64) -> (u64, bool) {
-        if self.step_timing.is_none() || budget == 0 {
+        if budget == 0 {
             return (budget, false);
         }
-        self.hot_countdown -= 1;
+        // A period shortened by step timing starts at once.
+        self.hot_countdown = self
+            .hot_countdown
+            .min(self.sample_period())
+            .saturating_sub(1);
         if self.hot_countdown != 0 {
             return (budget, false);
         }
-        self.hot_countdown = step_timing::HOT_SAMPLE_EVERY;
+        self.hot_countdown = self.sample_period();
         let mut x = self.hot_seed;
         x ^= x << 13;
         x ^= x >> 7;
@@ -291,6 +299,16 @@ impl<H: Host, D: Devices> Machine<H, D> {
         self.hot_seed = x;
         let drawn = 1 + x % step_timing::HOT_SAMPLE_SPAN;
         (budget.min(drawn), drawn < budget)
+    }
+
+    /// Native runs per sampled one: [`step_timing::HOT_SAMPLE_EVERY`] under
+    /// step timing, else [`step_timing::HEAT_SAMPLE_EVERY`].
+    pub(super) fn sample_period(&self) -> u32 {
+        if self.step_timing.is_some() {
+            step_timing::HOT_SAMPLE_EVERY
+        } else {
+            step_timing::HEAT_SAMPLE_EVERY
+        }
     }
 
     /// The architectural system count and each generic timer's `(CTL, CVAL)`

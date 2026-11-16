@@ -36,6 +36,8 @@ use core::sync::atomic::{
 };
 use stela_compiler::x86_64::chain::{self, LookupTable, TableReader};
 
+#[cfg(test)]
+mod replay;
 mod ring;
 #[cfg(test)]
 mod tests;
@@ -527,6 +529,10 @@ pub struct CodeReport {
     pub generations: [u32; 2],
     pub promoted: u64,
     pub outs: [u64; 4],
+    /// Thunks and tails that went in their block's part's late room, those
+    /// that found it full, and cold choices a reference kept from the
+    /// tenured part entered least ([`Ring::late_counts`]).
+    pub late: [u64; 3],
     /// Installs relocated from an entry proven during the boot, entries
     /// proven and refused, and the bytes kept ([`super::rebase`]).
     pub rebases: super::RebaseCounts,
@@ -777,6 +783,10 @@ impl Code {
                 .arena
                 .as_ref()
                 .map_or([0; 4], |arena| arena.ring.outs()),
+            late: self
+                .arena
+                .as_ref()
+                .map_or([0; 3], |arena| arena.ring.late_counts()),
             rebases: self.rebases.counts(),
         }
     }

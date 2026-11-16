@@ -1643,6 +1643,12 @@ pub struct HotBlock {
 pub const HOT_BLOCKS: usize = 8192;
 /// One run in this many is sampled.
 pub const HOT_SAMPLE_EVERY: u32 = 16;
+/// Without step timing, one run in this many is sampled, for the ring's
+/// heat alone (`Machine::heat`): a sample cuts its run short once, an
+/// exit and a fetch of about a microsecond, at most one in this many runs
+/// (PE4 makes about 50 K runs a second in a launch: under 0.05% of its
+/// time), and gives a part of hot chained code tens of samples a second.
+pub const HEAT_SAMPLE_EVERY: u32 = 128;
 /// A sampled run's budget is at most this many transfers.
 pub const HOT_SAMPLE_SPAN: u64 = 4096;
 
@@ -1770,6 +1776,11 @@ impl Levels {
     #[inline]
     pub(super) fn charge(&mut self, level: Level, spent: u64) {
         self.ticks[level as usize] += spent;
+        // No handler runs at EL0: back there, the one taken has returned,
+        // whether native code or the engine made its exception return.
+        if level == Level::User {
+            self.in_interrupt = false;
+        }
         if self.in_interrupt {
             self.interrupt_ticks += spent;
         }
@@ -1783,6 +1794,14 @@ impl Levels {
     pub(super) fn interrupt_taken(&mut self) {
         self.interrupts += 1;
         self.in_interrupt = true;
+    }
+
+    /// Native code made an exception return: the handler taken has ended,
+    /// and the run's ticks charged after are not its. What the run spent in
+    /// the handler before its return is charged outside it, so
+    /// `interrupt_ticks` is a lower bound.
+    pub(super) fn exception_returned(&mut self) {
+        self.in_interrupt = false;
     }
 
     /// A WFI, which completed at once if `at_once`.
@@ -2698,6 +2717,29 @@ mod tests {
         let later_delta = now.since(&now);
         assert_eq!(later_delta.phases, [0; Phase::COUNT]);
         assert_eq!(later_delta.lifetime_maxima, now.lifetime_maxima);
+    }
+
+    /// Native code makes most exception returns (`PES TRANSITIONS eret`):
+    /// one ends the handler the engine saw taken, and so does reaching EL0,
+    /// where no handler runs. Before, only a return the engine handled did,
+    /// and `irq%` counted the user time after native returns.
+    #[test]
+    fn a_native_exception_return_or_el0_time_ends_the_interrupt() {
+        let mut levels = Levels::default();
+        levels.interrupt_taken();
+        levels.charge(Level::Kernel, 5);
+        levels.exception_returned();
+        levels.charge(Level::Kernel, 7);
+        assert_eq!((levels.interrupts, levels.interrupt_ticks), (1, 5));
+        levels.interrupt_taken();
+        levels.charge(Level::Guarded, 2);
+        levels.charge(Level::User, 30);
+        levels.charge(Level::Kernel, 4);
+        assert_eq!((levels.interrupts, levels.interrupt_ticks), (2, 7));
+        assert!(!levels.in_interrupt);
+        // In-interrupt time never exceeds kernel and guarded time.
+        let handlers = levels.ticks[Level::Kernel as usize] + levels.ticks[Level::Guarded as usize];
+        assert!(levels.interrupt_ticks <= handlers);
     }
 
     #[test]

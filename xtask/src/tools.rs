@@ -25,6 +25,16 @@ pub fn cargo() -> Command {
     command
 }
 
+/// The environment variable the release workflow sets: a build that would
+/// leave out a part the release must hold fails instead.
+pub const RELEASE_VARIABLE: &str = "STELA_RELEASE";
+
+/// Whether this build makes a release: [`RELEASE_VARIABLE`] is set and not
+/// empty.
+pub fn release_build() -> bool {
+    env::var_os(RELEASE_VARIABLE).is_some_and(|value| !value.is_empty())
+}
+
 /// The environment variable that names the Apple silicon Mac reference tools
 /// reach over ssh.
 pub const MAC_VARIABLE: &str = "STELA_MAC";

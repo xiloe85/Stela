@@ -3132,12 +3132,13 @@ fn start_devices(
             // run with a host controller or the model, and Setup's Language
             // Chooser then waits for bluetoothd with a black screen. Without
             // a controller bluetoothd restarts and Setup goes on. The host's
-            // controller is released in the loader's root by its drop.
-            if host_controller.is_some() && options.input {
-                output::arguments(format_args!(
-                    "BLUETOOTH UNSUPPORTED the guest gets no controller: macOS does not \
-                     configure the guest's USB Bluetooth controller and its Setup waits for it\n"
-                ));
+            // controller is released in the loader's root by its drop. The
+            // log says so once, with a host controller or without one.
+            if let Some(line) = stela_boot_core::guest_bluetooth::unsupported_line(
+                host_controller.is_some(),
+                options.input,
+            ) {
+                output::arguments(format_args!("{line}"));
             }
             drop(host_controller);
             // With no adapter started, the screen names each one found and

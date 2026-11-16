@@ -182,10 +182,10 @@ fn the_boot_framebuffer_is_inherited_not_recreated() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(
-        answer(row(b"A475"), &[], 4, FULL_HD).unwrap().unwrap(),
-        1u32.to_le_bytes()
-    );
+    // setDisplayRefreshProperties publishes, so the display answers it.
+    assert!(answer(row(b"A475"), &[], 4, FULL_HD).unwrap().is_none());
+    let mut methods = methods();
+    assert_eq!(returned(methods.call(*b"A475", &[], 4)), [1, 0, 0, 0]);
 }
 
 #[test]
@@ -663,6 +663,35 @@ fn the_display_is_described_once_before_the_hotplug_and_the_same_after_a_reset()
     let again = drain(&mut methods, &[1, 0, 0, 0]);
     assert_eq!(published(&again), properties);
     assert_eq!(again, first);
+}
+
+#[test]
+fn set_display_refresh_properties_publishes_the_refresh_of_the_vblank_grid() {
+    struct Screen(u32);
+    impl Scanout for Screen {
+        fn mode(&self) -> Mode {
+            FULL_HD
+        }
+        fn refresh_millihertz(&self) -> u32 {
+            self.0
+        }
+        fn present(&mut self, _: &[u8]) -> Result<()> {
+            Ok(())
+        }
+    }
+    for (refresh, ticks) in [(60_000u32, 400_000u64), (144_000, 166_667)] {
+        let mut methods = Methods::new(Box::new(Screen(refresh)), interface());
+        assert_eq!(returned(methods.call(*b"A475", &[], 4)), [1, 0, 0, 0]);
+        let made = drain(&mut methods, &[1, 0, 0, 0]);
+        let properties = published(&made);
+        assert_eq!(properties.len(), 1);
+        let (key, text) = &properties[0];
+        assert_eq!(key, "IOMFBDisplayRefresh");
+        assert_eq!(*text, modes::display_refresh(ticks, COUNTER_HZ));
+        assert!(text.contains(&format!(
+            "<key>displayMinRefreshIntervalMachTime</key><integer size=\"64\">{ticks}</integer>"
+        )));
+    }
 }
 
 #[test]
@@ -1611,6 +1640,79 @@ fn ready_swaps_latch_at_one_vblank_and_the_newest_is_shown() {
     methods.present(2 * period + 1, fill).unwrap();
     assert_eq!(frames.borrow().len(), 2);
     assert!(methods.frame_pending());
+}
+
+#[test]
+fn a_shown_swap_sends_its_frame_info_before_its_completion() {
+    let screen = TestScreen(Rc::default(), Some(MODE));
+    let mut methods = Methods::new(Box::new(screen), interface());
+    let period = methods.refresh_ticks;
+    // Clients for Presentation_time (6), Requested_presentation (8) and
+    // Min_FrameTime (11), which the model does not fill.
+    let mut clients = [0u8; 0x6c];
+    for key in [6, 8, 11] {
+        clients[4 * key] = 1;
+    }
+    returned(methods.call(*b"A033", &clients, 0));
+    returned(methods.call(*b"A033", &clients, 0));
+    let reports = methods.take_unmodeled();
+    assert_eq!(
+        reports,
+        ["IOMFB unmodeled D589 Min_FrameTime (0xb): not modeled; sent as 0"]
+    );
+    methods.refresh(0);
+    // Two swaps replaced by a third before the vblank: only the third was
+    // shown, so only it has frame info.
+    for (dva, requested) in [(0x1000, 11u64), (0x2000, 22), (0x3000, period + 33)] {
+        let id = start_swap(&mut methods);
+        let mut input = submission(id, &[(0, 4, 2, dva)]);
+        input[swap::REQUESTED..swap::REQUESTED + 8].copy_from_slice(&requested.to_le_bytes());
+        returned(methods.call(*b"A407", &input, 0xc));
+    }
+    methods.present(period + 7, |_, _| true).unwrap();
+    let made: Vec<_> = drain(&mut methods, &[])
+        .into_iter()
+        .filter(|(tag, _)| *tag != SWAP_NOTIFY)
+        .collect();
+    let tags: Vec<_> = made
+        .iter()
+        .map(|(tag, input)| match *tag {
+            SWAP_INFO => (*tag, input[SWAP_INFO_ID]),
+            _ => (*tag, input[0]),
+        })
+        .collect();
+    assert_eq!(
+        tags,
+        [
+            (SWAP_COMPLETE, 1),
+            (SWAP_COMPLETE, 2),
+            (SWAP_INFO, 3),
+            (SWAP_COMPLETE, 3)
+        ]
+    );
+    let blob = &made[2].1;
+    assert_eq!(blob.len(), 0xe4);
+    let u64_at = |at: usize| u64::from_le_bytes(blob[at..at + 8].try_into().unwrap());
+    // Requested_presentation +0x08, Presentation_time +0x10 (the vblank's
+    // counter value), the swap ID at +0x38; the rest, null flag included, 0.
+    assert_eq!(u64_at(0x08), period + 33);
+    assert_eq!(u64_at(0x10), period);
+    assert_eq!(&blob[0x38..0x3c], &3u32.to_le_bytes());
+    let filled = [0x08..0x18, 0x38..0x3c];
+    for (at, &byte) in blob.iter().enumerate() {
+        if !filled.iter().any(|range| range.contains(&at)) {
+            assert_eq!(byte, 0, "byte {at:#x}");
+        }
+    }
+    // With no client left, swaps complete without frame info.
+    returned(methods.call(*b"A033", &[0; 0x6c], 0));
+    let id = start_swap(&mut methods);
+    returned(methods.call(*b"A407", &submission(id, &[(0, 4, 2, 0x4000)]), 0xc));
+    methods.present(2 * period, |_, _| true).unwrap();
+    complete(&mut methods, id, true);
+    // Min_FrameTime was reported once, at the first count.
+    let later = methods.take_unmodeled();
+    assert!(!later.iter().any(|line| line.contains("D589")), "{later:?}");
 }
 
 #[test]

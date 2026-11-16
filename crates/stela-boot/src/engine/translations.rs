@@ -623,6 +623,8 @@ struct Available {
     shared_bound: AtomicUsize,
     /// The fetch pages the machines keep in all ([`Translations::kept_pages`]).
     kept_pages: AtomicUsize,
+    /// The stored-form bytes the board keeps ([`Translations::kept_entry_bytes`]).
+    kept_entries: AtomicUsize,
     /// The writer sheds new entries, the heap being short
     /// ([`writer::Entries::shed`]): offers skip making their stored form.
     shed: AtomicBool,
@@ -632,6 +634,7 @@ static AVAILABLE: Available = Available {
     capabilities: AtomicU8::new(0),
     shared_bound: AtomicUsize::new(0),
     kept_pages: AtomicUsize::new(0),
+    kept_entries: AtomicUsize::new(0),
     shed: AtomicBool::new(false),
 };
 const READ_PACK: u8 = 1 << 0;
@@ -835,6 +838,13 @@ impl Translations for Shared {
         }
     }
 
+    fn kept_entry_bytes(&mut self) -> Option<usize> {
+        match AVAILABLE.kept_entries.load(Ordering::Acquire) {
+            0 => None,
+            bytes => Some(bytes),
+        }
+    }
+
     /// A 128th of the heap in page keys of 56 bytes: 2^18 keys (14.7 MB,
     /// the engine's most) from a 1.9 GB heap, enough for twice the distinct
     /// code pages a desktop boot reads.
@@ -848,10 +858,19 @@ pub fn store() -> Option<&'static mut Shared> {
     available(READ_PACK | WRITE_PACK | SHARE_BLOCKS).then(|| Box::leak(Box::new(Shared)))
 }
 
-/// Share compiled blocks between PEs, keeping up to `bound` bytes of buffers
-/// and cache metadata in the loader's store or a store for this boot. Allocator
-/// overhead and shared immutable preparation storage are outside this budget.
+/// Keep up to `bound` bytes of compiled code for the PEs: a quarter for
+/// blocks shared as they are compiled (buffers and cache metadata in the
+/// loader's store or a store for this boot), the rest for stored forms of
+/// blocks the ring took away and the guest runs again, which the board
+/// relocates instead of compiling (`Translations::kept_entry_bytes`). The
+/// shared blocks alone kept compile order, newer than the ring's code, so
+/// a block the ring took away had left them long before (run
+/// 20261116-111302: 447 K hits, 28.6 M misses). Allocator overhead and
+/// shared immutable preparation storage are outside this budget.
 pub fn share(bound: usize) {
+    let kept = bound - bound / 4;
+    AVAILABLE.kept_entries.store(kept, Ordering::Release);
+    let bound = bound / 4;
     BOOT.with(|boot| {
         let translator = boot
             .get_or_insert_with(|| Boot {

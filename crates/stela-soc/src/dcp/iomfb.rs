@@ -78,6 +78,15 @@
 //! then shifts as if it were the coprocessor's: Core Animation's display
 //! timeline sat 5.2 ms after the model's vblanks in the run measured.
 //!
+//! Frame info: `A033` counts the AP's clients per frame-info key. While any
+//! client asks, each displayed swap sends `D589 swap_info_notify_dispatch`
+//! just before its completion, with its presentation (that vblank's counter
+//! value) and its requested time; the keys the model does not fill are 0
+//! and reported once each when first asked for. `D590
+//! relbufinfo_notify_dispatch` is not sent: the AP passes its words to its
+//! relbuf clients without reading them, and no framework of the guest
+//! registers one.
+//!
 //! Composition (Inferred: the coprocessor's compositor is undocumented):
 //! layers 0..3 stack bottom to top over opaque black, each a source
 //! rectangle of its surface scaled nearest-neighbour into its destination
@@ -156,6 +165,72 @@ const SWAP_COMPLETE: [u8; 4] = *b"D594";
 /// second and third itself when they are zero, and Core Animation stops
 /// presenting without the tick.
 const SWAP_NOTIFY: [u8; 4] = *b"D588";
+/// `swap_info_notify_dispatch(SwapInfoBlob)`: one presented swap's frame
+/// info for the clients that asked for it (`A033`). The AP's
+/// `UPPipeAP_H13P::do_swap_info_notify` (0xfffffe0009a531e0) sends each
+/// client its mask, the swap ID and the values of its keys, read from the
+/// blob at [`FRAME_INFO_FIELDS`]; it computes `Presentation_delta` itself.
+const SWAP_INFO: [u8; 4] = *b"D589";
+/// The frame-info keys, in the AP's order (`UPPipeAP_H13P::
+/// supported_frame_info` 0xfffffe0009a52fc8, table 0xfffffe000cb590e8):
+/// `A033` counts clients per key in this order.
+const FRAME_INFO_KEYS: [&str; 27] = [
+    "Layer_0_CRC",
+    "Layer_1_CRC",
+    "Layer_2_CRC",
+    "Blend_CRC",
+    "ColorManager_CRC",
+    "Dither_CRC",
+    "Presentation_time",
+    "Presentation_delta",
+    "Requested_presentation",
+    "Issued_time",
+    "Performance_headroom",
+    "Min_FrameTime",
+    "Max_FrameTime",
+    "Frame_APCE",
+    "Bright_ScalingFactor",
+    "BrightOut_NoScale",
+    "RTPLC_Bright_Capped",
+    "RTPLC_RT_Trig",
+    "RTPLC_Nits_Cap",
+    "GP0_Max_BW",
+    "GP1_Max_BW",
+    "GP2_Max_BW",
+    "GP0_Obs_BW",
+    "GP1_Obs_BW",
+    "GP2_Obs_BW",
+    "Vbl_FrameTime",
+    "Last_Fence_or_Event_Time",
+];
+/// Where `do_swap_info_notify` reads each key: the times are u64s at
+/// +0x00..+0x30, the other keys u32s at +0x54 + 4 * key, and
+/// `Presentation_delta` is `Presentation_time` less the client's last one.
+const FRAME_INFO_FIELDS: [usize; 27] = {
+    let mut fields = [0; 27];
+    let mut key = 0;
+    while key < 27 {
+        fields[key] = 0x54 + 4 * key;
+        key += 1;
+    }
+    fields[9] = 0x00;
+    fields[8] = 0x08;
+    fields[6] = 0x10;
+    fields[7] = 0x10;
+    fields[25] = 0x18;
+    fields[26] = 0x20;
+    fields[11] = 0x28;
+    fields[12] = 0x30;
+    fields
+};
+/// The keys the model fills: `Presentation_time` (and the delta the AP
+/// derives from it) and `Requested_presentation`. Every other key a client
+/// asks for is sent as 0 and reported once.
+const FRAME_INFO_FILLED: u32 = 1 << 6 | 1 << 7 | 1 << 8;
+/// The blob's swap ID (also `do_crc_notify`'s and the kdebug events'), and
+/// its length; its null flag follows it.
+const SWAP_INFO_ID: usize = 0x38;
+const SWAP_INFO_BLOB: usize = 0xe0;
 /// The ticks per second of the counter refreshes are timed by.
 const COUNTER_HZ: u64 = crate::counter::FREQUENCY_HZ;
 
@@ -514,6 +589,9 @@ pub enum Degraded {
     /// Success with the value ignored, because the AP's caller retries a
     /// failure forever; the text says what is shown instead.
     Ignored(&'static str),
+    /// A frame-info key a client asked for that the model does not fill:
+    /// each presented swap's notice carries 0 for it.
+    Unfilled,
 }
 
 impl core::fmt::Display for Degraded {
@@ -525,6 +603,7 @@ impl core::fmt::Display for Degraded {
             Degraded::Unsupported => {
                 write!(f, "answered kIOReturnUnsupported (link status 2)")
             }
+            Degraded::Unfilled => write!(f, "not modeled; sent as 0"),
             Degraded::Ignored(shown) => {
                 write!(
                     f,
@@ -557,6 +636,8 @@ const SWAP_COMPLETE_DISPLAYED: usize = 4;
 const PROP_START: [u8; 4] = *b"D126";
 const PROP_CHUNK: [u8; 4] = *b"D127";
 const PROP_END: [u8; 4] = *b"D128";
+/// The property `setDisplayRefreshProperties` publishes (the kernel's key).
+const DISPLAY_REFRESH: &str = "IOMFBDisplayRefresh";
 /// `D127`'s chunk: `data[0x1000]` then `u32 offset`, `u32 length`.
 const CHUNK_BYTES: usize = 0x1000;
 /// `D128`'s key: `char[0x40]`, NUL-terminated by the AP.
@@ -614,6 +695,8 @@ pub struct Frame {
     /// notice (or the fence timeout).
     pub submitted_at: u64,
     pub ready_at: Option<u64>,
+    /// When the client asked for it to be shown ([`swap::REQUESTED`]).
+    pub requested: u64,
     /// The layer slots after this swap: what each shows, if anything.
     pub planes: [Option<scanout::Layer>; swap::LAYERS],
     /// The slots this swap set, whether to a surface or to nothing.
@@ -706,6 +789,14 @@ pub struct Methods {
     pending_call: Option<Log>,
     /// Whether the AP has any notification client (`A033`).
     notified: bool,
+    /// The clients asking for each frame-info key ([`FRAME_INFO_KEYS`]),
+    /// as `A033` last counted them.
+    frame_info: [u32; FRAME_INFO_KEYS.len()],
+    /// The frame info of presented swaps, each sent just before its
+    /// swap's completion: `(swap ID, D589 input)`.
+    swap_info: VecDeque<(u32, Vec<u8>)>,
+    /// Frame-info notices sent; the first one is logged.
+    swap_info_sent: u64,
     /// The counter value of the next vblank; 0 before the display's first
     /// look, which starts the grid.
     next_refresh: u64,
@@ -871,6 +962,9 @@ impl Methods {
             called: BTreeSet::new(),
             pending_call: None,
             notified: false,
+            frame_info: [0; FRAME_INFO_KEYS.len()],
+            swap_info: VecDeque::new(),
+            swap_info_sent: 0,
             next_refresh: 0,
             refresh_ticks: refresh_ticks(refresh),
             latched: None,
@@ -1453,6 +1547,9 @@ impl Methods {
             // Replaced in every slot it set, with none of its surfaces on
             // screen: the AP may take its surfaces back at once.
             let displayed = frame.updated & !later != 0 || on_screen;
+            if displayed {
+                self.queue_swap_info(frame.swap_id, frame.requested, due);
+            }
             self.completed.push_back((frame.swap_id, displayed));
             self.completion_times
                 .push_back((frame.swap_id, frame.submitted_at, now));
@@ -1480,9 +1577,36 @@ impl Methods {
                 last_swap: shown.swap_id,
             });
         }
+        self.queue_swap_info(shown.swap_id, shown.requested, due);
         self.completed.push_back((shown.swap_id, true));
         self.completion_times
             .push_back((shown.swap_id, shown.submitted_at, now));
+    }
+
+    /// Hold the frame info of swap `swap_id`, shown at the vblank whose
+    /// counter value is `presented` after its client asked for `requested`,
+    /// to send before its completion, when any client asked for frame info.
+    /// Core Animation's handler (QuartzCore 0x18e05848c) finds its record
+    /// of the swap by ID and drops a notice whose record is gone, so the
+    /// notice goes first (inferred order: the firmware is not available).
+    /// `Presentation_time` is the vblank's counter value, the time and clock
+    /// of that vblank's vsync (`D588`); Core Animation takes it as the
+    /// presented time when `Vbl_FrameTime` is 0, as here. A key without a
+    /// field here is 0 and was reported when asked for.
+    fn queue_swap_info(&mut self, swap_id: u32, requested: u64, presented: u64) {
+        if self.frame_info.iter().all(|&clients| clients == 0) {
+            return;
+        }
+        let mut input = alloc::vec![0u8; SWAP_INFO_BLOB + 4];
+        let mut put = |key: usize, value: u64| {
+            let at = FRAME_INFO_FIELDS[key];
+            input[at..at + 8].copy_from_slice(&value.to_le_bytes());
+        };
+        put(6, presented);
+        put(8, requested);
+        input[SWAP_INFO_ID..SWAP_INFO_ID + 4].copy_from_slice(&swap_id.to_le_bytes());
+        // The null flag at SWAP_INFO_BLOB stays clear: the blob is present.
+        self.swap_info.push_back((swap_id, input));
     }
 
     fn refusal(&mut self, text: String) {
@@ -1524,6 +1648,27 @@ impl Methods {
     /// `detail` (a parameter the method names, where one tells requests
     /// apart), in the display log and as an `UNMODELED` line.
     fn report_unmodeled(&mut self, tag: [u8; 4], answer: Degraded, detail: Option<u32>) {
+        let name = self.name(&tag);
+        self.report_degraded(tag, name, answer, detail);
+    }
+
+    /// Report once that frame-info `key` is asked for and sent as 0.
+    fn report_unfilled(&mut self, key: usize) {
+        self.report_degraded(
+            SWAP_INFO,
+            FRAME_INFO_KEYS[key],
+            Degraded::Unfilled,
+            Some(key as u32),
+        );
+    }
+
+    fn report_degraded(
+        &mut self,
+        tag: [u8; 4],
+        name: &'static str,
+        answer: Degraded,
+        detail: Option<u32>,
+    ) {
         if self.unmodeled.len() >= UNMODELED_REPORTS && !self.unmodeled.contains(&(tag, detail)) {
             if !self.unlisted_unmodeled {
                 self.unlisted_unmodeled = true;
@@ -1534,7 +1679,6 @@ impl Methods {
             return;
         }
         if self.unmodeled.insert((tag, detail)) {
-            let name = self.name(&tag);
             let entry = Log::Unmodeled {
                 tag,
                 name,
@@ -1638,32 +1782,38 @@ impl Methods {
             ("IOMFBUUID", Advertised::uuid()),
         ];
         for (key, xml) in properties {
-            // setDCPAVPropEnd NUL-terminates the buffer's last byte and
-            // hands the whole buffer to OSUnserializeXML.
-            let mut bytes = xml.into_bytes();
-            bytes.push(0);
-            let length =
-                u32::try_from(bytes.len()).map_err(|_| refuse!("DCP property is too long"))?;
-            self.queue(PROP_START, Packed::new().u32(length))?;
-            for (index, chunk) in bytes.chunks(CHUNK_BYTES).enumerate() {
-                let mut data = [0u8; CHUNK_BYTES];
-                data[..chunk.len()].copy_from_slice(chunk);
-                self.queue(
-                    PROP_CHUNK,
-                    Packed::new()
-                        .bytes(&data)
-                        .u32((index * CHUNK_BYTES) as u32)
-                        .u32(chunk.len() as u32),
-                )?;
-            }
-            let mut name = [0u8; KEY_BYTES];
-            name[..key.len()].copy_from_slice(key.as_bytes());
-            self.queue(PROP_END, Packed::new().bytes(&name))?;
+            self.publish_property(key, xml)?;
         }
         // A single, untiled display: a zero IOMFB_TiledDisplayInfo, present
         // (its null flag clear); the trailing bool is not read by
         // IOMobileFramebufferShim::hotPlug_notify_gated.
         self.queue_hotplug()
+    }
+
+    /// Queue the publication of property `key` on the IOMFB service:
+    /// `D126` with the document's length, its `D127` chunks, then `D128`
+    /// with the key.
+    fn publish_property(&mut self, key: &str, xml: String) -> Result<()> {
+        // setDCPAVPropEnd NUL-terminates the buffer's last byte and
+        // hands the whole buffer to OSUnserializeXML.
+        let mut bytes = xml.into_bytes();
+        bytes.push(0);
+        let length = u32::try_from(bytes.len()).map_err(|_| refuse!("DCP property is too long"))?;
+        self.queue(PROP_START, Packed::new().u32(length))?;
+        for (index, chunk) in bytes.chunks(CHUNK_BYTES).enumerate() {
+            let mut data = [0u8; CHUNK_BYTES];
+            data[..chunk.len()].copy_from_slice(chunk);
+            self.queue(
+                PROP_CHUNK,
+                Packed::new()
+                    .bytes(&data)
+                    .u32((index * CHUNK_BYTES) as u32)
+                    .u32(chunk.len() as u32),
+            )?;
+        }
+        let mut name = [0u8; KEY_BYTES];
+        name[..key.len()].copy_from_slice(key.as_bytes());
+        self.queue(PROP_END, Packed::new().bytes(&name))
     }
 
     fn queue_hotplug(&mut self) -> Result<()> {
@@ -1749,10 +1899,35 @@ impl Service for Methods {
                 self.reply(tag, packed)
             }
             // update_notify_clients_dcp(u32 clients[27]): a count of clients
-            // for each notification. Every one is told of the refresh.
+            // for each frame-info key (`set_notify_tag_mask` type 3 through
+            // `update_notify_clients`). Every one is told of the refresh;
+            // presented swaps send the keys asked for ([`SWAP_INFO`]), and a
+            // key the model does not fill is reported once.
             (H13P, "update_notify_clients_dcp") => {
                 self.notified = input.iter().any(|&byte| byte != 0);
+                for key in 0..FRAME_INFO_KEYS.len() {
+                    self.frame_info[key] = fields.u32()?;
+                    if self.frame_info[key] != 0 && FRAME_INFO_FILLED & 1 << key == 0 {
+                        self.report_unfilled(key);
+                    }
+                }
                 Ok(Step::Return(Vec::new()))
+            }
+            // setDisplayRefreshProperties() -> bool: the AP's method
+            // (IOMobileFramebufferAP 0xfffffe000ad7e48c) only makes the call
+            // and returns its bool; nothing on the AP builds the dictionary,
+            // so the coprocessor publishes IOMFBDisplayRefresh itself, and
+            // D126..D128 is its one way to publish a dictionary (inferred:
+            // the firmware is not available). The keys, order and units are
+            // the kernel's own builder's ([`modes::display_refresh`]), for
+            // the refresh the vblank grid runs at.
+            (AP, "setDisplayRefreshProperties") => {
+                let xml = modes::display_refresh(self.refresh_ticks, COUNTER_HZ);
+                if let Err(reason) = self.publish_property(DISPLAY_REFRESH, xml) {
+                    return self.refuse(tag, reason);
+                }
+                let packed = Packed::new().bool(true).finish(output);
+                self.reply(tag, packed)
             }
             // setup_video_limits(): the fixed mode has no limits to set up.
             (H13P, "setup_video_limits") => Ok(Step::Return(Vec::new())),
@@ -2109,6 +2284,7 @@ impl Service for Methods {
                 self.outgoing.clear();
                 self.completed.clear();
                 self.completion_times.clear();
+                self.swap_info.clear();
                 Ok(Step::Return(Vec::new()))
             }
             _ => match answer(row, input, output, self.mode()) {
@@ -2191,6 +2367,35 @@ impl Service for Methods {
                         return methods
                             .refuse_answer(tag, refuse!("the AP refused the published mode"));
                     }
+                    Ok(())
+                }),
+            });
+        }
+        let &(next, _) = self.completed.front()?;
+        // The frame info of a swap whose completion is gone is dropped.
+        while self.swap_info.front().is_some_and(|&(swap, _)| {
+            swap != next && !self.completed.iter().any(|&(id, _)| id == swap)
+        }) {
+            self.swap_info.pop_front();
+        }
+        if self
+            .swap_info
+            .front()
+            .is_some_and(|&(swap, _)| swap == next)
+        {
+            let (_, input) = self.swap_info.pop_front().expect("front checked");
+            self.in_flight = true;
+            self.swap_info_sent += 1;
+            if self.swap_info_sent == 1 || self.trace_swap(next) {
+                self.callback_log(SWAP_INFO, input.len(), SWAP_INFO_BLOB as u32);
+            }
+            return Some(Callback {
+                tag: SWAP_INFO,
+                input,
+                output: SWAP_INFO_BLOB as u32,
+                // The AP copies the blob back; nothing reads it.
+                then: Box::new(|methods, _| {
+                    methods.in_flight = false;
                     Ok(())
                 }),
             });
@@ -2357,6 +2562,7 @@ impl Methods {
             waiting_since: None,
             submitted_at: self.now,
             ready_at: (fenced == 0).then_some(self.now),
+            requested: submission.requested,
             planes: shown,
             updated: if submission.enabled & swap::REMOVE_LAYERS != 0 {
                 (1 << swap::LAYERS) - 1
@@ -2528,8 +2734,6 @@ pub fn answer(row: &Method, input: &[u8], output: u32, mode: Mode) -> Result<Opt
         (UP, "set_create_DFB") | (AP, "stop_signal") | (AP, "free_signal") => sized(Vec::new()),
         // flush_supportsPower(bool): no output.
         (AP, "flush_supportsPower") => sized(Vec::new()),
-        // setDisplayRefreshProperties: success (out=4).
-        (AP, "setDisplayRefreshProperties") => sized(bool_reply(true)),
         // apt_supported (UPPipeAP_H13P::late_init 0x2a4e98c): false. The
         // firmware answers pipe word +0x42c == 1 (restore 0x2bcad0, normal
         // 0x2bf884), which its init sets only to 3 or 0 (0x2c84b0, 0x2c8724).

@@ -4,14 +4,18 @@
 //! the x86 trap flag, which records every host instruction it executes.
 //! Guest registers point into a scratch arena whose words point back into
 //! it, so loads and pointer chasing stay mapped; the anchors point at zeroed
-//! areas with an unbounded chain budget, and the pointer-authentication
-//! routine returns its input. `DENSITY_OUT` gets, per block, a `B` line
+//! areas with an unbounded chain budget, PAC instructions run the cipher
+//! inline where the host has AES-NI, as the engine's blocks do, and the
+//! pointer-authentication routine returns its input. `DENSITY_OUT` gets, per block, a `B` line
 //! (PC, weight, exit, host instructions executed inline, out of line and
 //! outside the block) and per guest instruction an `S` line (its word, how
 //! often its code was entered, host instructions inline, and those out of
-//! line that it branched to). Inline is the block's code up to its last
-//! instruction's first unconditional jump or return; the rest (side-exit
-//! stubs, cold paths, loop copies) is out of line.
+//! line that it branched to), then a `C` line (its code, source map, inline
+//! end and how often each host instruction ran). Inline is the block's code
+//! up to its last instruction's first unconditional jump or return; the
+//! rest (side-exit stubs, cold paths, loop copies) is out of line. At the end
+//! `T` lines give the weighted host instructions per guest instruction by
+//! cause ([`census`]), also printed.
 use crate::{
     GuestAddress, GuestState, Options, TargetCpu,
     block::{BlockProfile, CompilationPlan, Features},
@@ -20,6 +24,8 @@ use crate::{
 use alloc::{format, string::String, vec, vec::Vec};
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicUsize, Ordering};
+
+mod census;
 
 const SIGTRAP: i32 = 5;
 const SA_SIGINFO: i32 = 4;
@@ -30,6 +36,9 @@ const RIP: usize = 16;
 const EFLAGS: usize = 17;
 const STEPS: usize = 1 << 20;
 const OUTSIDE: u32 = u32::MAX;
+/// Where the pointer anchor's area holds the cipher's schedules and layouts
+/// (zero: every pointer is canonical and every authentication succeeds).
+const CIPHER: u32 = 0x400;
 
 #[repr(C)]
 struct SigAction {
@@ -107,7 +116,10 @@ fn options() -> Options {
             tags: 0x40,
             strips: 0x80,
             routine: 0x1c0,
-            cipher: None,
+            // As the engine's blocks on an AES-NI host: the cipher inline.
+            cipher: TargetCpu::detect()
+                .supports(TargetCpu::Aes)
+                .then_some(CIPHER),
         }),
         self_loops: true,
         ..NativeSystem::NONE
@@ -244,8 +256,16 @@ fn prepare(state: &mut GuestState) {
                 .cast::<u64>()
                 .write(area as u64);
         }
-        // ChainControl's budget, and the pointer routine.
+        // ChainControl's budget, open tag words for the cipher, and the
+        // pointer routine.
         anchors.cast::<u64>().write(u64::MAX / 2);
+        for key in 0..pointer::TAG_WORDS {
+            anchors
+                .add(3 << 16)
+                .add(0x40 + 8 * key)
+                .cast::<u64>()
+                .write(1);
+        }
         anchors.add(3 << 16).add(0x1c0).cast::<u64>().write(
             (authenticated as extern "sysv64" fn(*mut u8, u32, u64, u64) -> Pair) as usize as u64,
         );
@@ -260,6 +280,7 @@ fn executed_paths_of_real_blocks() {
     let output = std::env::var("DENSITY_OUT").expect("DENSITY_OUT names the output");
     let mut out = std::fs::File::create(output).expect("the output");
     let options = options();
+    let mut causes = census::Census::default();
     for line in std::fs::read_to_string(input).expect("the sample").lines() {
         let mut fields = line.split(' ');
         let (Some(pc), Some(weight), Some(hex)) = (fields.next(), fields.next(), fields.next())
@@ -343,7 +364,49 @@ fn executed_paths_of_real_blocks() {
             )
             .unwrap();
         }
+        // The code, its source map and how often each host instruction ran,
+        // for a per-cause census of the executed instructions.
+        let mut runs = alloc::collections::BTreeMap::<u32, u32>::new();
+        for &offset in &trace[first..end] {
+            if offset != OUTSIDE {
+                *runs.entry(offset).or_default() += 1;
+            }
+        }
+        let guest = if looped != 0 {
+            looped
+        } else {
+            entered.iter().filter(|&&count| count != 0).count() as u64
+        };
+        let code: String = body.iter().map(|byte| format!("{byte:02x}")).collect();
+        let spans: Vec<String> = map
+            .iter()
+            .map(|(guest, offset)| format!("{:x}:{offset}", guest.0))
+            .collect();
+        let counts: Vec<String> = runs
+            .iter()
+            .map(|(offset, count)| format!("{offset:x}:{count}"))
+            .collect();
+        writeln!(
+            out,
+            "C {code} {} {inline_end:x} {}",
+            spans.join(","),
+            counts.join(",")
+        )
+        .unwrap();
+        causes.add(&census::Traced {
+            weight: weight.parse().unwrap_or(1),
+            guest,
+            pc,
+            source: &source,
+            code: body,
+            map,
+            inline_end,
+            runs: &runs,
+        });
     }
+    let table = causes.table();
+    write!(out, "{table}").unwrap();
+    std::print!("{table}");
 }
 
 /// The end of a block's inline code: past the first unconditional jump or
@@ -351,32 +414,8 @@ fn executed_paths_of_real_blocks() {
 /// when there is none.
 fn inline_end(body: &[u8], last: usize) -> usize {
     // Decoded by objdump: exact for every form the emitter uses.
-    let path = std::env::temp_dir().join(format!("stela-inline-{}.bin", std::process::id()));
-    std::fs::write(&path, &body[last..]).unwrap();
-    let listing = std::process::Command::new("objdump")
-        .args([
-            "-D",
-            "-b",
-            "binary",
-            "-m",
-            "i386:x86-64",
-            "--no-show-raw-insn",
-        ])
-        .arg(&path)
-        .output()
-        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
-        .unwrap_or_default();
-    let _ = std::fs::remove_file(&path);
-    let mut lines = listing
-        .lines()
-        .filter_map(|line| {
-            let (offset, rest) = line.trim_start().split_once(":\t")?;
-            Some((
-                usize::from_str_radix(offset, 16).ok()?,
-                String::from(rest.trim()),
-            ))
-        })
-        .peekable();
+    let listing = census::listing(&body[last..]);
+    let mut lines = listing.iter().peekable();
     while let Some((_, text)) = lines.next() {
         if text.starts_with("jmp") || text.starts_with("ret") {
             return last + lines.peek().map_or(body.len() - last, |(next, _)| *next);

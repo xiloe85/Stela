@@ -996,8 +996,9 @@ pub(super) fn run<H: Host>(
                 let hub = machine.devices.hub();
                 let millis = |counts: u64| u128::from(counts) * 1000 / u128::from(host::COUNTER_HZ);
                 output::arguments(format_args!(
-                    "CLOCK AT STOP stalled_ms={} lag_ms={}\n",
+                    "CLOCK AT STOP stalled_ms={} leased_ms={} lag_ms={}\n",
                     millis(hub.clock_stalled()),
+                    millis(hub.clock_leased()),
                     millis(hub.clock_lag().0),
                 ));
             }
@@ -1853,6 +1854,8 @@ impl Heartbeat {
                 u128::from(elapsed) * u128::from(host::COUNTER_HZ) / u128::from(tsc_hz.max(1));
             let guest = count.wrapping_sub(self.clock_count);
             let stalled = machine.devices.hub().clock_stalled();
+            // The part of it a lease held while a kernel spin was old.
+            let leased = machine.devices.hub().clock_leased();
             // What the count still lags host time by after holds, and how
             // much of the lag it made up since the last beat.
             let (lag, repaid) = machine.devices.hub().clock_lag();
@@ -1860,10 +1863,11 @@ impl Heartbeat {
                 let rate = u128::from(guest) * 1000 / wall.max(1);
                 let millis = |counts: u64| u128::from(counts) * 1000 / u128::from(host::COUNTER_HZ);
                 output::arguments(format_args!(
-                    "CLOCK RATE guest_per_wall={}.{:03} stalled_ms={} lag_ms={} repaid_ms={}\n",
+                    "CLOCK RATE guest_per_wall={}.{:03} stalled_ms={} leased_ms={} lag_ms={} repaid_ms={}\n",
                     rate / 1000,
                     rate % 1000,
                     millis(stalled),
+                    millis(leased),
                     millis(lag),
                     millis(repaid),
                 ));
@@ -2498,8 +2502,13 @@ fn board_code(
     // generation, and parts taken away: the oldest young one, the tenured
     // one entered least, a tenured one past its age, one mostly holes.
     let outs: [u64; 4] = core::array::from_fn(|why| now.outs[why].saturating_sub(was.outs[why]));
+    // Thunks and tails in their part's late room, those that found it full
+    // and pinned the open part, and cold choices a pin turned away from the
+    // part entered least.
+    let late: [u64; 3] = core::array::from_fn(|at| now.late[at].saturating_sub(was.late[at]));
     let churn = format!(
-        "{churn} gens=young/tenured:{}/{} promoted={} out=young/cold/aged/holes:{}/{}/{}/{}",
+        "{churn} gens=young/tenured:{}/{} promoted={} out=young/cold/aged/holes:{}/{}/{}/{} \
+         late=taken/full/pinned:{}/{}/{}",
         now.generations[0],
         now.generations[1],
         now.promoted.saturating_sub(was.promoted),
@@ -2507,6 +2516,9 @@ fn board_code(
         outs[1],
         outs[2],
         outs[3],
+        late[0],
+        late[1],
+        late[2],
     );
     format!(
         " board={}M/{}/{} retired={} forced={} lost={} redone/refused={}/{} \

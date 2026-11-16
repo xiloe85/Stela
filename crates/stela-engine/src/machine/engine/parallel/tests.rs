@@ -3216,6 +3216,12 @@ fn a_wfe_spinning_on_its_monitor_keeps_guest_work_through_its_wait() {
     let (_hub, mut machine) = wait(true);
     assert!(machine.waiting.is_some(), "nothing woke it");
     assert!(machine.clock.has_guest_work(), "a spinner has guest work");
+    // In the kernel its spin is timed from its first pass, and later
+    // passes keep that start.
+    let started = machine.clock.spin_started();
+    assert!(started.is_some(), "a kernel spin publishes its start");
+    let _ = machine.schedule();
+    assert_eq!(machine.clock.spin_started(), started);
     // Another core's store to the granule (the ticket's turn) wakes it.
     assert!(machine.host.write_ram(GRANULE, &[1]));
     let _ = machine.schedule();
@@ -3225,6 +3231,7 @@ fn a_wfe_spinning_on_its_monitor_keeps_guest_work_through_its_wait() {
     let (_hub, machine) = wait(false);
     assert!(machine.waiting.is_some());
     assert!(!machine.clock.has_guest_work(), "a plain WFE holds nothing");
+    assert_eq!(machine.clock.spin_started(), None);
 }
 
 /// A device whose IRQ rises at `irq_at`, which a write sets; counts its

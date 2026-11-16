@@ -326,7 +326,9 @@ impl<H: Host, D: Devices> Machine<H, D> {
             let phases = self.clock_phases();
             let retired = self.cpu.retired;
             if !paused && self.polls_monitor() {
-                self.clock.spin(|| self.host.counter(), retired, phases);
+                let at_el0 = self.cpu.pstate.el == 0;
+                self.clock
+                    .spin(|| self.host.counter(), retired, phases, at_el0);
             } else {
                 self.clock.idle(|| self.host.counter(), retired, phases);
             }
@@ -490,7 +492,9 @@ impl<H: Host, D: Devices> Machine<H, D> {
         }
         let (retired, phases) = (self.cpu.retired, self.clock_phases());
         if spins {
-            self.clock.spin(|| self.host.counter(), retired, phases);
+            let at_el0 = self.cpu.pstate.el == 0;
+            self.clock
+                .spin(|| self.host.counter(), retired, phases, at_el0);
         } else {
             self.clock.idle(|| self.host.counter(), retired, phases);
         }

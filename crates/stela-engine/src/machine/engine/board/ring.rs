@@ -18,9 +18,12 @@
 //! - else the oldest young part while young code holds more than its share
 //!   ([`Ring::young_parts`]) or no tenured part is full: young code goes
 //!   first in first out, as all code did before;
-//! - else the tenured part entered least since the last such choice: a
-//!   fetch the engine makes counts its block's part ([`Ring::entered_by`],
-//!   in batches per PE), which chained native code never does;
+//! - else the tenured part entered least since the last such choice: each
+//!   PE counts its block's part at every fetch the engine makes and, with
+//!   the transfers one sample stands for, at every sampled native run that
+//!   stops in it ([`Ring::entered_by`], in batches per PE), so chained code,
+//!   which reaches the engine about once a run's budget, counts as the
+//!   transfers it makes;
 //! - else, when none fits, the oldest settled part free of references, or
 //!   the oldest part.
 //!
@@ -32,6 +35,16 @@
 //! part is always free to go, and of the parts that filled a quarter turn
 //! ago (at least one, as at most a quarter turn of parts filled since) the
 //! oldest is too.
+//!
+//! A thunk or tail a block of a full part needs (a link made after its part
+//! filled, a hot exit's stamped tail) goes in that part's own late room
+//! ([`Ring::take_late`]), the last [`LATE_SHARE`]th of each part, which the
+//! bump cursors leave: a reference within a part pins nothing. Before, each
+//! went in its generation's open part, so hot code in old parts, which
+//! keeps linking, pinned every part opened after it, and only the oldest
+//! tenured parts were ever free: the cold choice took the oldest, hot or
+//! not, and its blocks came back. Only when the late room is full does one
+//! go in the open part and pin it.
 //!
 //! The margins keep installs from meeting a retirement; what makes one
 //! harmless is two rules. A place a take hands out counts as a writer of
@@ -57,6 +70,9 @@ pub(in crate::machine::engine) const YOUNG: usize = 0;
 pub(in crate::machine::engine) const TENURED: usize = 1;
 /// The fewest parts a ring keeps a tenured generation in.
 const TENURE_PARTS: usize = 8;
+/// The share of each part (a fraction's denominator) kept for the thunks
+/// and tails its blocks need once it is full ([`Ring::take_late`]).
+pub(in crate::machine::engine) const LATE_SHARE: u32 = 16;
 /// Turns of the ring a tenured part lives at most.
 pub(in crate::machine::engine) const AGE_TURNS: u32 = 4;
 /// A part whose blocks left the index for at least this share (in
@@ -134,10 +150,10 @@ struct Plan {
     retiring: Option<u32>,
 }
 
-/// A part's count of fetches, on a cache line of its own.
+/// A part's count of entries, on a cache line of its own.
 #[repr(align(64))]
 #[derive(Default)]
-struct Entered(AtomicU32);
+struct Entered(AtomicU64);
 
 /// A part's count of unfinished installs, on a cache line of its own.
 #[repr(align(64))]
@@ -146,6 +162,16 @@ struct Writers(AtomicU32);
 
 pub(in crate::machine::engine) struct Ring {
     part_bytes: u32,
+    /// Where each part's late room begins: the bump cursors stop there.
+    main_bytes: u32,
+    /// Per part: the next free byte of its late room.
+    late: Box<[AtomicU32]>,
+    /// Late room places taken, and those refused for want of room.
+    late_taken: AtomicU64,
+    late_full: AtomicU64,
+    /// Cold choices that could not take the tenured part entered least, as
+    /// a live part's code jumped into it.
+    pinned: AtomicU64,
     pub(in crate::machine::engine) parts: u32,
     /// The parts young code keeps when tenured code wants room; 0 for a
     /// ring too small for a tenured generation, whose code is all young.
@@ -193,6 +219,7 @@ impl Ring {
             "a ring of three to 64 parts"
         );
         let part_bytes = u32::try_from(part_bytes).expect("a part below 4 GiB");
+        let main_bytes = part_bytes - (part_bytes / LATE_SHARE) / 16 * 16;
         let young_parts = if parts >= TENURE_PARTS {
             (parts as u32 / 4).max(2)
         } else {
@@ -202,11 +229,16 @@ impl Ring {
         state[0] = State::Open;
         let ring = Self {
             part_bytes,
+            main_bytes,
+            late: (0..parts).map(|_| AtomicU32::new(main_bytes)).collect(),
+            late_taken: AtomicU64::new(0),
+            late_full: AtomicU64::new(0),
+            pinned: AtomicU64::new(0),
             parts: parts as u32,
             young_parts,
             cursors: [
                 AtomicU64::new(cursor(head(0, 0), 0)),
-                AtomicU64::new(cursor(NONE, part_bytes)),
+                AtomicU64::new(cursor(NONE, main_bytes)),
             ],
             opened: AtomicU32::new(1),
             plan: Mutex::new(Plan {
@@ -265,7 +297,7 @@ impl Ring {
             let (top, offset) = ((current >> 32) as u32, current as u32);
             let start = (offset as usize).next_multiple_of(align);
             let end = start + bytes;
-            if top == NONE || end > self.part_bytes as usize {
+            if top == NONE || end > self.main_bytes as usize {
                 return Err(top);
             }
             let part = top & (MAX_PARTS as u32 - 1);
@@ -293,6 +325,77 @@ impl Ring {
                 }
             }
         }
+    }
+
+    /// `bytes` at `align` in `part`'s late room, for a thunk or tail of one
+    /// of its blocks, while the part holds code ([`Self::live`]). As for
+    /// [`Self::take`], the place counts as a writer of the part until the
+    /// caller gives it back ([`Self::release`]), so a part chosen meanwhile
+    /// is not opened again before the write ends; its code goes with the
+    /// part's, the only code that jumps into it.
+    pub(in crate::machine::engine) fn take_late(
+        &self,
+        part: usize,
+        bytes: usize,
+        align: usize,
+    ) -> Option<Place> {
+        debug_assert!(align.is_power_of_two());
+        let writers = &self.writers[part].0;
+        writers.fetch_add(1, Ordering::SeqCst);
+        let generation = self.holds(part);
+        if !self.live[part].load(Ordering::SeqCst) {
+            writers.fetch_sub(1, Ordering::Release);
+            return None;
+        }
+        let late = &self.late[part];
+        let mut current = late.load(Ordering::Relaxed);
+        loop {
+            let start = (current as usize).next_multiple_of(align);
+            let end = start + bytes;
+            if end > self.part_bytes as usize {
+                writers.fetch_sub(1, Ordering::Release);
+                self.late_full.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            match late.compare_exchange_weak(
+                current,
+                end as u32,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.late_taken.fetch_add(1, Ordering::Relaxed);
+                    return Some(Place {
+                        generation,
+                        part: part as u32,
+                        offset: start as u32,
+                    });
+                }
+                Err(now) => current = now,
+            }
+        }
+    }
+
+    /// The bytes of each part the bump cursors fill: the rest is its late
+    /// room.
+    pub(in crate::machine::engine) fn main_bytes(&self) -> usize {
+        self.main_bytes as usize
+    }
+
+    /// The part `stream` installs into now, if it has one open.
+    pub(in crate::machine::engine) fn open_part(&self, stream: usize) -> Option<usize> {
+        let head = self.head(stream);
+        (head != NONE).then_some((head & (MAX_PARTS as u32 - 1)) as usize)
+    }
+
+    /// Late room places taken and refused, and cold choices a reference
+    /// kept from the part entered least.
+    pub(in crate::machine::engine) fn late_counts(&self) -> [u64; 3] {
+        [
+            self.late_taken.load(Ordering::Relaxed),
+            self.late_full.load(Ordering::Relaxed),
+            self.pinned.load(Ordering::Relaxed),
+        ]
     }
 
     /// Open a free part for `stream`, whose part of head `full` is full,
@@ -350,6 +453,7 @@ impl Ring {
         self.installed[part].store(0, Ordering::Relaxed);
         self.dropped[part].store(0, Ordering::Relaxed);
         self.refs[part].store(0, Ordering::Relaxed);
+        self.late[part].store(self.main_bytes, Ordering::Relaxed);
         self.live[part].store(true, Ordering::Release);
         plan.state[part] = State::Open;
         // A swap, not a store: it reads the last take's compare-exchange,
@@ -408,11 +512,21 @@ impl Ring {
                 Some((oldest, Why::Young))
             })
             .or_else(|| {
+                let heat = |part: &u32| self.entered[*part as usize].0.load(Ordering::Relaxed);
                 let coldest = tenured
                     .iter()
                     .copied()
                     .filter(|&part| fit(part))
-                    .min_by_key(|&part| self.entered[part as usize].0.load(Ordering::Relaxed))?;
+                    .min_by_key(heat)?;
+                // The coldest settled part, were references no bar.
+                let unpinned = tenured
+                    .iter()
+                    .copied()
+                    .filter(|&part| settled(part))
+                    .min_by_key(heat);
+                if unpinned.is_some_and(|part| heat(&part) < heat(&coldest)) {
+                    self.pinned.fetch_add(1, Ordering::Relaxed);
+                }
                 // The counts start over: the next choice weighs what the
                 // parts are entered from now on.
                 for part in tenured.iter() {
@@ -455,7 +569,8 @@ impl Ring {
         }
         plan.state[part as usize] = State::Retiring;
         plan.retiring = Some(part);
-        self.live[part as usize].store(false, Ordering::Release);
+        // Ordered with a late take's writer count ([`Self::take_late`]).
+        self.live[part as usize].store(false, Ordering::SeqCst);
         self.outs[why as usize].fetch_add(1, Ordering::Relaxed);
     }
 
@@ -533,16 +648,22 @@ impl Ring {
         self.live[part].load(Ordering::Acquire) && self.holds(part) == place.generation
     }
 
-    /// A fetch found a block of `part`: one atomic add, no lock. PEs add
+    /// A block of `part` was entered: one atomic add, no lock. PEs add
     /// their counts in batches ([`Self::entered_by`]); tests count one.
     #[cfg(test)]
     pub(in crate::machine::engine) fn entered(&self, part: usize) {
         self.entered_by(part, 1);
     }
 
-    /// `count` fetches found blocks of `part`, which a PE kept and adds at
-    /// once (`Machine::entered`).
-    pub(in crate::machine::engine) fn entered_by(&self, part: usize, count: u32) {
+    /// The entries `part` counted since the last cold choice.
+    #[cfg(test)]
+    pub(in crate::machine::engine) fn entered_count(&self, part: usize) -> u64 {
+        self.entered[part].0.load(Ordering::Relaxed)
+    }
+
+    /// Blocks of `part` were entered about `count` times, which a PE kept
+    /// and adds at once (`Machine::heat`).
+    pub(in crate::machine::engine) fn entered_by(&self, part: usize, count: u64) {
         self.entered[part].0.fetch_add(count, Ordering::Relaxed);
     }
 
