@@ -299,3 +299,56 @@ diff unread.
 - `cargo xtask gpu anv-test`: not run (fetch incomplete; also needs
   `spirv-tools` + `spirv-llvm-translator` on the host).
 - No macOS boot attempt; no USB media written; no disk touched.
+
+## Session 4 — first real-hardware boot (2026-11-16)
+
+Image: Intel + diagnostics (`STELA_XE=1 cargo xtask boot build --release
+--diagnostics`) → `stela.efi` 205,270,016 B, `stela-deploy.efi` 53,819,392 B,
+written to a 14.9 GB GPT/FAT32 stick with `--host-check --deadline 120` and a
+preallocated `\EFI\stela\boot.log` (layout in `BOOT_QEMU.md`). Booted on the
+UX3405CA itself. Raw log: `boot-log-hardware-2026-11-16.log`.
+
+### What the firmware phase proves
+
+- Stela mounts, connects 554 of 561 firmware handles, reads settings, finds the
+  real panel (1920x1200 at 60.003 Hz, EDID 302x189 mm) and snapshots the image.
+- The PCI census runs on real hardware and lists 40 functions, including
+  `00:02.0 8086:7d51 … : GPU`, `00:0e.0 8086:7d0b : Intel VMD storage`,
+  `00:0d.0 8086:7ec0 : xHCI USB`, `00:14.0 8086:777d : xHCI USB`,
+  `00:14.3 8086:7740 : iwlwifi`, `00:1f.3 8086:7728 : not driven` (audio),
+  `00:1f.4 8086:7722 : i801 SMBus`, `00:0d.2 8086:7ec2 : USB4/Thunderbolt NHI`.
+- **`HOST GPU 0000:00:02.0 8086:7d51: xe will bind it`** — the first evidence on
+  the real device that the Intel stack admits the Arc 140T. Precisely: the
+  admission test (xe's PCI ID tables plus ARL→Meteor Lake platform) answers yes;
+  nothing has probed or bound the GPU yet.
+- CPU: x86-64-v2, invariant TSC 3.6864 GHz from a 38.4 MHz crystal
+  (`leaf 0x15 tsc/crystal=192/2`), base 3700 / max 5100 MHz, no AVX-512, and the
+  firmware reports 42-bit physical / 48-bit virtual addresses (no LA57).
+
+### Where it stopped, and why the log stops there
+
+Screen: `CHECK native-memory PASS`, then
+`HOST DEVICE FAILED pci-0000:00:0d.0 (USB) error=native resource service
+unavailable`. The file ends at 22.542 s on the GPU line — the
+ExitBootServices boundary. One cause for both: after EBS the boot log is written
+through Stela's own block driver over the same USB stick, and the xHCI controller
+that stick hangs on failed to attach, so the engine never got the volume back and
+could not keep writing. The console continued because it has its own path.
+
+`native resource service unavailable` is `ServiceError::Unavailable`
+(`crates/stela-drivers/src/probe/services.rs:74`): the mount supplies no such
+service for that device. Prime suspect is `Services::interrupts()`
+(`crates/stela-boot/src/engine/services.rs:397`), which is `Unavailable` until
+`native_irq::start` has mounted the boot CPU's identity — a system-engine startup
+step `--host-check` does not perform (it installs its own IDT and APIC instead).
+The QEMU runs showed the same storage/keyboard failures, which fits a
+**host-check lane** limitation rather than a hardware defect. The exact xHCI call
+site is still open: the two known `services.interrupts()` callers are `bcm4377`
+and `intel_bluetooth`, neither of them USB.
+
+### Not proven by this run
+
+- No xe probe, no firmware load, no GuC/HuC/GSC claim, no modeset. "xe will bind
+  it" is the selection answer, not a bound device.
+- Storage, GPT, keyboard and interrupt checks reached no verdict on hardware, and
+  the log could not be kept past EBS.

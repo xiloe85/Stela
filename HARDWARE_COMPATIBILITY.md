@@ -182,3 +182,27 @@ core's class/device lists must be implemented before brightness is claimed.
 | Bluetooth | unsupported | new transport | unsupported |
 | Audio (SOF) | unsupported | SOF topology + amps | unsupported |
 | Display (eDP) | xe display code compiles | bring-up + brightness | unproven |
+
+## Measured: the machine's own PCI census (2026-11-16)
+
+From `boot-log-hardware-2026-11-16.log`, the boot that first ran on the UX3405CA.
+Stela enumerates 40 functions (`HOST PCI`). What matters for the port:
+
+| Address | ID | Census line | Meaning |
+|---|---|---|---|
+| `00:02.0` | `8086:7d51` | `: GPU` + `HOST GPU … xe will bind it` | the Arc 140T; the Intel stack admits it |
+| `00:0e.0` | `8086:7d0b` | `: Intel VMD storage` | the VMD that hides the internal NVMe |
+| `00:0d.0` | `8086:7ec0` | `: xHCI USB` | failed to attach (see below) |
+| `00:14.0` | `8086:777d` | `: xHCI USB` | second controller |
+| `00:0d.2` | `8086:7ec2` | `: USB4/Thunderbolt NHI` | not driven |
+| `00:14.3` | `8086:7740` | `: iwlwifi Wi-Fi (with --wifi)` | opt-in only |
+| `00:1f.3` | `8086:7728` | `: not driven` | SOF audio |
+| `00:1f.4` | `8086:7722` | `: i801 SMBus` | driven |
+
+Display: real EDID, `1920x1200` at `60.003 Hz`, panel `302x189 mm`. That is the
+panel's native mode, so the GOP path works on this machine without any stub.
+
+USB is the current obstacle: `HOST DEVICE FAILED pci-0000:00:0d.0 (USB)
+error=native resource service unavailable`. The controller never attaches, so
+Stela cannot read its own stick through its drivers after ExitBootServices, and
+the on-stick boot log stops at that boundary.

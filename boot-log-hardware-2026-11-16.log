@@ -1,0 +1,80 @@
+STELALOG
+=== STELA BOOT 1 ===
+STELA UEFI MOUNT version=0.4.2
+FIRMWARE watchdog off
+HOST TSC hz=3686400000 source=cpuid measured_hz=3686406056 measured_by=pm-timer differs_ppm=1
+[   21.426] STEP Opening the boot log on the USB t=21.426
+[   21.426] BOOT LOG FILE fresh: the log region is blank
+[   21.426] BOOT LOG FILE \EFI\stela\boot.log through the firmware boot=1 head=0x15
+[   21.441] STEP o Opening the boot log on the USB (\EFI\stela\boot.log) ms=15
+[   21.456] HOST version=0.4.2 cpu="Intel(R) Core(TM) Ultra 7 255H" family=0x6 model=0xc5 stepping=2 ram=16.5GB firmware="American Megatrends" revision=0x50020
+[   21.456] STEP Connecting the firmware's drivers to the boot's devices t=21.456
+[   22.449] FIRMWARE connected 554 of 561 handles, left 7 network controllers to Stela's drivers, 0 slow
+[   22.449] STEP o Connecting the firmware's drivers to the boot's devices ms=992
+[   22.462] STEP Reading Stela's settings t=22.462
+[   22.477] HOST FIRMWARE manifest=absent
+[   22.478] HOST SMBIOS RECORD {"board_vendor":{"bytes":22,"sha256":"97e85d885aa63428f87342cf08d660256582b7adb911069e05900ed68a12ede4","state":"value"},"observation":{"bytes":5279,"entry_sha256":"ad266b5a5fcfe00d7317b3ff598bfa33a1732dc609e631c4d9c53cc03be4a844","sha256":"880c9ff3d2292e8d28147089fdfd94770f718eafc75c3058632f0ad1b5c58b78","state":"present","table_sha256":"aed47db9e4cf0d27872395fad26b6fb8ae6d977d7c7754dd2bd60b63aade4af9"},"phase":"before-ebs","product_name":{"bytes":34,"sha256":"f3b936bc58bd21161f924a6de7f472c1cf95dd3f9f854513283f07d13af96294","state":"value"},"product_version":{"bytes":11,"sha256":"ff127462adb6ccfbc065adf25e3bab25a8403698c1ff01ff135f269a558b4bd9","state":"value"},"resource":{"name":"host/smbios/entry-and-table.bin","source":"UEFI SMBIOS configuration table f2fd1544-9794-4a2c-992e-e5bbcf20e394","target":{"board":null,"driver":"host-smbios","hardware":"physical-host","revision":"entry-and-table-v1"}},"source_entry_address":1486905344,"source_guid":"f2fd1544-9794-4a2c-992e-e5bbcf20e394","system_vendor":{"bytes":22,"sha256":"97e85d885aa63428f87342cf08d660256582b7adb911069e05900ed68a12ede4","state":"value"}}
+[   22.479] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanOemSignedPnvm.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanOemSignedPnvm"},"variable":"UefiCnvWlanOemSignedPnvm"}
+[   22.480] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanReducedPower.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanReducedPower"},"variable":"UefiCnvWlanReducedPower"}
+[   22.481] HOST WIFI UEFI RECORD {"guid":"e65d8884-d4af-4b20-8d03-772ecc3da531","name":"intel/uefi/UefiCnvCommonSTEP.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:e65d8884-d4af-4b20-8d03-772ecc3da531","revision":"UefiCnvCommonSTEP"},"variable":"UefiCnvCommonSTEP"}
+[   22.481] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanWRDS.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanWRDS"},"variable":"UefiCnvWlanWRDS"}
+[   22.482] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanEWRD.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanEWRD"},"variable":"UefiCnvWlanEWRD"}
+[   22.483] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanWGDS.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanWGDS"},"variable":"UefiCnvWlanWGDS"}
+[   22.483] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanPPAG.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanPPAG"},"variable":"UefiCnvWlanPPAG"}
+[   22.484] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanWRDD.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanWRDD"},"variable":"UefiCnvWlanWRDD"}
+[   22.485] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanGeneralCfg.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanGeneralCfg"},"variable":"UefiCnvWlanGeneralCfg"}
+[   22.486] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanWBEM.bin","observation":{"attributes":7,"bytes":5,"probe_reported_bytes":5,"sha256":"2c8781cf4ff5280129b190856ff431adae77be2294fc3ffdadf88105743fe667","state":"present"},"phase":"before-ebs","provenance":{"license":"LicenseRef-Local-UEFI-Observation","member":"UefiCnvWlanWBEM","revision":"sha256:2c8781cf4ff5280129b190856ff431adae77be2294fc3ffdadf88105743fe667;attributes:00000007","source":"UEFI GetVariable 92daaf2f-c02b-455b-b2ec-f5a3594f4aea"},"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanWBEM"},"variable":"UefiCnvWlanWBEM"}
+[   22.487] HOST WIFI UEFI RECORD {"guid":"e65d8884-d4af-4b20-8d03-772ecc3da531","name":"intel/uefi/UefiCnvCommonECKV.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:e65d8884-d4af-4b20-8d03-772ecc3da531","revision":"UefiCnvCommonECKV"},"variable":"UefiCnvCommonECKV"}
+[   22.487] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanWTAS.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanWTAS"},"variable":"UefiCnvWlanWTAS"}
+[   22.488] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanSPLC.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanSPLC"},"variable":"UefiCnvWlanSPLC"}
+[   22.489] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/WPFC.bin","observation":{"attributes":7,"bytes":17,"probe_reported_bytes":17,"sha256":"0a88111852095cae045340ea1f0b279944b2a756a213d9b50107d7489771e159","state":"present"},"phase":"before-ebs","provenance":{"license":"LicenseRef-Local-UEFI-Observation","member":"WPFC","revision":"sha256:0a88111852095cae045340ea1f0b279944b2a756a213d9b50107d7489771e159;attributes:00000007","source":"UEFI GetVariable 92daaf2f-c02b-455b-b2ec-f5a3594f4aea"},"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"WPFC"},"variable":"WPFC"}
+[   22.490] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanSarGeoOffsetMapping.bin","observation":{"attributes":7,"bytes":339,"probe_reported_bytes":339,"sha256":"f6f021176c9510d12418fc0cbd548174ef0d5d7ee74c420b94b00ffe17798e66","state":"present"},"phase":"before-ebs","provenance":{"license":"LicenseRef-Local-UEFI-Observation","member":"UefiCnvWlanSarGeoOffsetMapping","revision":"sha256:f6f021176c9510d12418fc0cbd548174ef0d5d7ee74c420b94b00ffe17798e66;attributes:00000007","source":"UEFI GetVariable 92daaf2f-c02b-455b-b2ec-f5a3594f4aea"},"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanSarGeoOffsetMapping"},"variable":"UefiCnvWlanSarGeoOffsetMapping"}
+[   22.491] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/CnvUefiWlanUATS.bin","observation":{"attributes":7,"bytes":339,"probe_reported_bytes":339,"sha256":"7a131027129124290187b3a74d91d61cdf5cc538a4a09b1f225f4a420abe6de1","state":"present"},"phase":"before-ebs","provenance":{"license":"LicenseRef-Local-UEFI-Observation","member":"CnvUefiWlanUATS","revision":"sha256:7a131027129124290187b3a74d91d61cdf5cc538a4a09b1f225f4a420abe6de1;attributes:00000007","source":"UEFI GetVariable 92daaf2f-c02b-455b-b2ec-f5a3594f4aea"},"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"CnvUefiWlanUATS"},"variable":"CnvUefiWlanUATS"}
+[   22.492] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/CnvUefiWlanUNEB.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"CnvUefiWlanUNEB"},"variable":"CnvUefiWlanUNEB"}
+[   22.492] HOST WIFI UEFI RECORD {"guid":"92daaf2f-c02b-455b-b2ec-f5a3594f4aea","name":"intel/uefi/UefiCnvWlanPuncturing.bin","observation":{"reported_bytes":0,"stage":"probe","state":"absent","status":9223372036854775822},"phase":"before-ebs","provenance":null,"target":{"board":null,"driver":"wifi-intel","hardware":"uefi:92daaf2f-c02b-455b-b2ec-f5a3594f4aea","revision":"UefiCnvWlanPuncturing"},"variable":"UefiCnvWlanPuncturing"}
+[   22.493] STEP o Reading Stela's settings ms=31
+[   22.506] DISPLAY firmware mode 1920x1200 Bgr
+[   22.506] DISPLAY modes 1920x1200 Bgr 640x480 Bgr 800x600 Bgr 1024x768 Bgr 1280x720 Bgr 1280x1024 Bgr 1600x1200 Bgr 1920x1080 Bgr 1440x900 Bgr
+[   22.506] DISPLAY EDID image 302x189 mm
+[   22.506] DISPLAY EDID (active) prefers 1920x1200 at 60.003 Hz
+[   22.506] DISPLAY runs 1920x1200 Bgr: the panel's native resolution
+[   22.509] BOOT IMAGE snapshot physical=0x424d8000 bytes=0x3794000 release=ok
+[   22.509] HOST CHECK --host-check --deadline 120
+[   22.509] CPU vendor="GenuineIntel" brand="Intel(R) Core(TM) Ultra 7 255H" family=0x6 model=0xc5 stepping=2 max_leaf=0x23 max_extended=0x80000008
+[   22.509] CPU address bits physical=42 virtual=48
+[   22.509] CPU leaf 0x15 tsc/crystal=192/2 crystal_hz=38400000
+[   22.509] CPU leaf 0x16 base_mhz=3700 max_mhz=5100 bus_mhz=100
+[   22.509] CPU present SSE3 SSSE3 SSE4.1 SSE4.2 POPCNT CMPXCHG16B LAHF/SAHF-64 NX CMPXCHG8B PCLMULQDQ AES SHA AVX AVX2 F16C FMA BMI1 BMI2 LZCNT MOVBE XSAVE ERMS FSRM RDRAND RDSEED FSGSBASE RDTSCP APIC x2APIC TSC-deadline ARAT invariant-TSC 1GiB-pages PCID INVPCID SMEP SMAP
+[   22.509] CPU absent OSXSAVE AVX512F AVX512BW AVX512CD AVX512DQ AVX512VL LA57 hypervisor
+[   22.509] CPU x86-64 level v2
+[   22.509] CHECK cpu PASS x86-64-v2 floor_missing=[] la57=false
+[   22.522] CHECK tsc PASS hz=3686400000 invariant=true source=Cpuid
+[   22.537] HOST PCI 0000:00:1f.4 8086:7722 class=0c0500 rev=00 subsystem=1043:1fd3: i801 SMBus
+[   22.537] HOST PCI 0000:00:00.0 ffff:ffff class=ffffff rev=ff: not driven
+[   22.537] HOST PCI 0000:00:00.0 ffff:ffff class=ffffff rev=ff: not driven
+[   22.537] HOST PCI 0000:00:00.0 ffff:ffff class=ffffff rev=ff: not driven
+[   22.537] HOST PCI 0000:00:00.0 8086:7d06 class=060000 rev=05 subsystem=1043:1fd3: not driven
+[   22.538] HOST PCI 0000:00:02.0 8086:7d51 class=030000 rev=03 subsystem=1043:1fd3: GPU
+[   22.538] HOST PCI 0000:00:04.0 8086:7d03 class=118000 rev=05 subsystem=1043:1fd3: not driven
+[   22.538] HOST PCI 0000:00:07.0 8086:7ec4 class=060400 rev=10: PCI bridge
+[   22.538] HOST PCI 0000:00:07.1 8086:7ec5 class=060400 rev=10: PCI bridge
+[   22.538] HOST PCI 0000:00:08.0 8086:774c class=088000 rev=00 subsystem=1043:1fd3: not driven
+[   22.539] HOST PCI 0000:00:0a.0 8086:7d0d class=118000 rev=01 subsystem=1043:1fd3: not driven
+[   22.539] HOST PCI 0000:00:0b.0 8086:7d1d class=120000 rev=05 subsystem=1043:20bf: not driven
+[   22.539] HOST PCI 0000:00:0d.0 8086:7ec0 class=0c0330 rev=10 subsystem=1043:1fd3: xHCI USB
+[   22.539] HOST PCI 0000:00:0d.2 8086:7ec2 class=0c0340 rev=10 subsystem=1043:1fd3: USB4/Thunderbolt NHI
+[   22.539] HOST PCI 0000:00:0e.0 8086:7d0b class=010400 rev=00 subsystem=1043:1fd3: Intel VMD storage
+[   22.540] HOST PCI 0000:00:12.0 8086:7745 class=070000 rev=00 subsystem=1043:1fd3: not driven
+[   22.540] HOST PCI 0000:00:14.0 8086:777d class=0c0330 rev=00 subsystem=1043:201f: xHCI USB
+[   22.540] HOST PCI 0000:00:14.2 8086:777f class=050000 rev=00 subsystem=1043:1fd3: not driven
+[   22.540] HOST PCI 0000:00:14.3 8086:7740 class=028000 rev=00 subsystem=8086:00e4: iwlwifi Wi-Fi (with --wifi)
+[   22.541] HOST PCI 0000:00:15.0 8086:7778 class=0c8000 rev=00 subsystem=1043:1fd3: not driven
+[   22.541] HOST PCI 0000:00:15.1 8086:7779 class=0c8000 rev=00 subsystem=1043:1fd3: not driven
+[   22.541] HOST PCI 0000:00:16.0 8086:7770 class=078000 rev=00 subsystem=1043:1fd3: not driven
+[   22.541] HOST PCI 0000:00:1e.0 8086:7725 class=078000 rev=00 subsystem=1043:1fd3: not driven
+[   22.541] HOST PCI 0000:00:1e.3 8086:7730 class=0c8000 rev=00 subsystem=1043:1fd3: not driven
+[   22.542] HOST PCI 0000:00:1f.0 8086:7702 class=060100 rev=00 subsystem=1043:1fd3: not driven
+[   22.542] HOST PCI 0000:00:1f.3 8086:7728 class=040100 rev=00 subsystem=1043:1a63: not driven
+[   22.542] HOST PCI 0000:00:1f.4 8086:7722 class=0c0500 rev=00 subsystem=1043:1fd3: i801 SMBus
+[   22.542] HOST PCI 0000:00:1f.5 8086:7723 class=0c8000 rev=00 subsystem=1043:1fd3: not driven
+[   22.542] HOST GPU 0000:00:02.0 8086:7d51: xe will bind it

@@ -22,12 +22,15 @@ Status vocabulary: **done** / **in progress** / **not started** / **blocked**.
 `GPU_BACKEND_DESIGN.md`: four approaches compared; **xe + ANV + BRW** chosen,
 with the module map, execution flow, memory design and test strategy.
 
-## M3 — Intel GPU initialization  → **in progress (build path fixed, probe not run)**
+## M3 — Intel GPU initialization  → **in progress (selection proven on hardware, probe not run)**
 
-Done in this pass: the Intel-only configuration now compiles at all
-(`build.rs`'s `kbuild` gate, `build/xe.rs`'s import list), and an Arrow Lake
-admission test passes. Not done: firmware wiring, xe probe under Stela, any
-modeset.
+Done: the Intel-only configuration compiles (`build.rs`'s `kbuild` gate,
+`build/xe.rs`'s import list), an Arrow Lake admission test passes, the xe
+firmware family is wired into the loader bundle, and **the real machine now
+answers the selection question**: `HOST GPU 0000:00:02.0 8086:7d51: xe will bind
+it` (`boot-log-hardware-2026-11-16.log`, `DEVELOPMENT_LOG.md` session 4). That is
+the admission test on the physical Arc 140T; it is not a bound device.
+Not done: xe probe under Stela, firmware load, GuC/HuC/GSC claim, any modeset.
 
 Already upstream: xe compiles with shared i915 display; tables generated;
 admission + device query implemented; ANV admitted into the Metal layer.
