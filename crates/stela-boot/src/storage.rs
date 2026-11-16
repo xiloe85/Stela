@@ -25,6 +25,7 @@ use stela_drivers::{
     Clock, Handoff, PlatformCaptures,
     block::BlockDevice,
     bus::{dma::RegionAllocator, pci},
+    gpu::{Adapter, Vendor, stack::GpuStack},
     probe::probe,
 };
 use stela_runtime::pc::{
@@ -271,18 +272,46 @@ fn report_census(functions: &[crate::pci_io::FunctionObservation]) {
             functions.len() - CENSUS_LINES
         ));
     }
-    let nvidia: Vec<u16> = functions
+    let gpus: Vec<_> = functions
         .iter()
         .map(crate::pci_io::FunctionObservation::identity)
-        .filter(|identity| identity.vendor == NVIDIA && identity.class[0] == 0x03)
+        .filter(|identity| identity.class[0] == 0x03 && identity.address.function == 0)
+        .collect();
+    let nvidia: Vec<u16> = gpus
+        .iter()
+        .filter(|identity| identity.vendor == NVIDIA)
         .map(|identity| identity.device)
         .collect();
     let notice = gpu_notice(&nvidia);
     if nvidia.is_empty() {
-        output::arguments(format_args!(
-            "UNSUPPORTED host GPU: no NVIDIA display controller among {} PCI functions\n",
-            functions.len()
-        ));
+        // A display controller of another vendor is all the graphics there
+        // is: say what that vendor's own stack answers, so an Intel or AMD
+        // PC is told what it lacks instead of being told it has no NVIDIA
+        // card.
+        if gpus.is_empty() {
+            output::arguments(format_args!(
+                "UNSUPPORTED host GPU: no display controller among {} PCI functions\n",
+                functions.len()
+            ));
+        }
+        for identity in &gpus {
+            let adapter = Adapter {
+                address: identity.address,
+                vendor: Vendor::from_pci(identity.vendor),
+                device: identity.device,
+                class: identity.class,
+            };
+            match GpuStack::select(&adapter) {
+                Ok(stack) => output::arguments(format_args!(
+                    "HOST GPU {} {:04x}:{:04x}: {} will bind it\n",
+                    identity.address, identity.vendor, identity.device, stack.kernel.driver
+                )),
+                Err(reason) => output::arguments(format_args!(
+                    "UNSUPPORTED host GPU {} {:04x}:{:04x}: {reason}\n",
+                    identity.address, identity.vendor, identity.device
+                )),
+            }
+        }
     } else if notice != 0 {
         output::arguments(format_args!(
             "UNSUPPORTED host GPU: no NVIDIA display controller here is of a chip Stela drives: {nvidia:04x?}\n"
