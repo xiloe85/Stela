@@ -79,6 +79,93 @@ laptop has. Added `("7d51", "Arrow Lake P", false)`, so `cargo xtask gpu
 anv-test` exercises device creation, a BRW compute pipeline and one
 submission for this exact GPU.
 
+### Checks actually run
+
+| Check | Outcome |
+|---|---|
+| `cargo xtask gpu fetch` | **succeeded** — linux (730 MB), mesa (198 MB), llvm (141 MB), libdrm, xnu, all at their pins, Stela's series applied |
+| `cargo check -p xtask` | **passed** (1m23s) with the `7d51` addition |
+| `cargo test -p stela-driver-gpu --features metal` | **passed**: 639 tests, 0 failed, 1 ignored; plus 3 `kbuild` and 1 `llvm_passes` integration tests |
+| `cargo test -p stela-driver-gpu --features xe-port,metal -- metal::intel` | first attempt **failed to compile** (bug 1), second **failed on the import guard** (bug 2), third **passed**: 4 Intel admission tests, 0 failed |
+| `cargo test -p stela-driver-gpu --features xe-port,metal` (all) | **passed**: 654 tests, 0 failed, 1 ignored |
+
+### Bug 1 (upstream, fixed here) — `xe-port` alone did not compile
+
+```
+error[E0432]: unresolved import `super::kbuild`
+  --> crates/stela-driver-gpu/build/xe.rs:4:12
+note: found an item that was configured out --> build.rs:12  (feature "nouveau-port")
+```
+
+`build/xe.rs` imports `super::kbuild`, but `mod kbuild` was gated on
+`nouveau-port` only, so selecting the Intel port without NVIDIA's broke the
+build script. Fixed by gating it on
+`any(feature = "nouveau-port", feature = "xe-port")`. Only those two build
+modules use `kbuild` (`build/nouveau.rs`, `build/xe.rs`), so the gate is
+complete. This is exactly the kind of defect that hides while the Intel path
+is only ever built together with NVIDIA's.
+
+### Bug 2 (upstream, fixed here) — xe's import list omitted the driver core's device lists
+
+After bug 1, the image compiled 352 C objects of the Intel composite and then
+the import guard stopped it:
+
+```
+the imports of xe changed: newly open {"class_find_device", "device_find_child"}; now supplied []
+  at crates/stela-driver-gpu/build/image.rs:86
+```
+
+`build/xe.rs`'s `OPEN` list (the imports the environment does not supply, by
+service) lacked the entry `build/nouveau.rs` and `build/amdgpu.rs` both
+carry, so an image that builds xe without nouveau could not satisfy the
+guard. Added:
+
+```rust
+("the driver core's device lists", &["class_find_device", "device_find_child"]),
+```
+
+Those two are `STELA_UNSUPPORTED` **traps** (`__builtin_trap()`, see
+`crates/stela-linux/src/compat/unsupported.h`), not graceful refusals. That
+matters for Intel in a way it does not for NVIDIA: `backlight.c` and
+`hwmon.c` search class devices for the panel's backlight and the GT's
+sensors, and an Intel laptop with an internal panel is exactly the case that
+reaches them. **Before brightness is attempted, the driver core's class and
+device lists must be implemented**, or the boot will fault instead of
+failing cleanly. The comment in `build/xe.rs` says so.
+
+### Result of the Intel build
+
+```
+cargo test -p stela-driver-gpu --features xe-port,metal
+  -> 654 passed; 0 failed; 1 ignored
+  -> metal::intel::tests::arrow_lake_is_the_meteor_lake_platform_built_in ... ok
+  -> metal::intel::tests::an_integrated_gpu_is_built_in_with_xes_platform_name ... ok
+  -> metal::intel::tests::a_discrete_gpu_is_in_a_slot_or_external_with_its_link ... ok
+  -> metal::intel::tests::other_devices_and_drivers_are_refused_with_the_reason ... ok
+```
+
+The Intel kernel composite (xe + the i915 display code + DRM core, 352 C
+objects) builds inside Stela's Linux environment, passes the import guard,
+and the Intel Metal admission logic answers correctly for this laptop's GPU.
+That is Level 2 of the plan demonstrated in code, and the first time this
+configuration existed at all: before these two fixes, `xe-port` could not be
+built without `nouveau-port`.
+
+### Verified against the pinned Linux tree (Linux 7.2.12)
+
+- `0x7D51` is in `include/drm/intel/pciids.h:803` (`INTEL_ARL_H_IDS`).
+- `xe_pci.c:514`: `INTEL_ARL_IDS(INTEL_VGA_DEVICE, &mtl_desc)` → ARL uses
+  `mtl_desc`: `PLATFORM(METEORLAKE)`, `dma_mask_size = 46`,
+  `has_display = true`, `require_force_probe = true`.
+- Therefore `xe::admits(0x7d51)` succeeds and the Metal platform facts for
+  this laptop's GPU are architecture `METEORLAKE`, `BuiltIn`, no transfer
+  rate, not headless. Added that case to `metal/intel/tests.rs`.
+
+### Commits on `fork` (xiloe85/Stela)
+
+- `e3d5ebf` docs: the eight audit documents
+- `687c7a1` feat(xe): ANV's host test covers Arrow Lake-P's 0x7d51
+
 ### Not done in this session
 
 - `cargo xtask gpu nvk` / `dist` (image build): not completed.

@@ -70,12 +70,24 @@ LLVM + Clang development files (host has **23.1.3** ✓), SPIRV-Tools,
 | Check | Result |
 |---|---|
 | Hardware inventory (`lscpu`, `lspci -nnk`, `glxinfo -B`, `lsusb`, `aplay -l`, DRM sysfs) | **ran**, results in HARDWARE_COMPATIBILITY.md |
-| `cargo xtask gpu fetch` | **started**, did not complete in this session (see DEVELOPMENT_LOG) |
-| `cargo xtask gpu anv-test` | **not run** — blocked on submodule fetch and possibly `llvm-spirv` |
-| `cargo test -p stela-driver-gpu` | **not run** (needs the fetch for the generated xe tables) |
-| `cargo xtask dist` / image build | **not run** — hours of compile, tight RAM |
+| `cargo xtask gpu fetch` | **ran, succeeded** — all five submodules at their pins, patches applied (`third_party/*` on branch `stela`) |
+| `cargo check -p xtask` | **ran, passed** (1m23s) after adding `7d51` to `xtask/src/gpu/anv.rs` |
+| `cargo test -p stela-driver-gpu --features metal` | **ran, passed** — 639 tests, 0 failed, 1 ignored (+ 3 kbuild, 1 llvm-passes) |
+| `cargo test -p stela-driver-gpu --features xe-port,metal -- metal::intel` | **ran, passed** — 4 Intel admission tests, after two build fixes (`kbuild` gate, xe's import list). This compiles the Intel composite: xe + shared i915 display + DRM core, 352 C objects |
+| `cargo test -p stela-driver-gpu --features xe-port,metal` (all) | **ran, passed** — 654 tests, 0 failed, 1 ignored |
+| `cargo xtask gpu anv-test` | **not run** — host lacks `SPIRV-LLVM-Translator` (`llvm-spirv`), which `mesa_clc` needs; `SPIRV-Tools 2026.4.1`, glslang 16.6.0, meson 1.12.1 and libdrm 2.4.134 are present |
+| `cargo xtask gpu nvk` / `dist` (image build) | **not run** — needs LLVM for UEFI + Mesa for the image; hours of compile, ~1 GB RAM free on this machine |
 | Real-GPU dispatch on Arc 140T | **not run** |
 | Stela boot on this laptop | **not run** |
+
+Missing host packages for the Intel test lane (install only if you accept an
+Arch package transaction on this machine):
+
+```sh
+# names as packaged on Arch
+spirv-llvm-translator   # provides llvm-spirv + SPIRV-LLVM-Translator.pc
+vulkan-tools            # vulkaninfo, to record this GPU's Vulkan capabilities
+```
 
 No test in this repository has been reported as passing that was not
 executed.

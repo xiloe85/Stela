@@ -7,7 +7,7 @@ mod image;
 #[cfg(feature = "linux-drm")]
 #[path = "build/imports.rs"]
 mod imports;
-#[cfg(feature = "nouveau-port")]
+#[cfg(any(feature = "nouveau-port", feature = "xe-port"))]
 #[path = "build/kbuild.rs"]
 mod kbuild;
 #[cfg(feature = "linux-kernel")]

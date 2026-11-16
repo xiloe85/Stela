@@ -33,6 +33,18 @@ consequences: build with `--jobs 2..4`; expect shader-cache pressure; a
 16 GB machine can boot but "stable accelerated desktop" will need cache
 caps and careful buffer lifetimes.
 
+## 3a. Brightness/backlight will fault, not fail gracefully
+
+`class_find_device` and `device_find_child` are `STELA_UNSUPPORTED` traps
+(`__builtin_trap()`) in Stela's compat layer, because the driver core keeps
+no class device list. `backlight.c` and `hwmon.c` use exactly those searches
+for a panel's backlight and the GT's sensors. On an Intel laptop with an
+internal panel this is reachable, so **brightness is blocked on implementing
+the driver core's class and device device lists**, and until then a modeset
+that registers the backlight can fault instead of reporting an error. The
+build's import list now declares them for xe (required to build the Intel
+image at all), with that warning beside it.
+
 ## 4. Firmware, display and submission bring-up is unfinished upstream
 
 - GuC/HuC/GSC/DMC firmware recipes exist, but only nouveau's claim path

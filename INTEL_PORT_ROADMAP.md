@@ -10,7 +10,7 @@ Status vocabulary: **done** / **in progress** / **not started** / **blocked**.
 | Task | Status | Evidence |
 |---|---|---|
 | Clone upstream | done | `Stela-audit/`, commit `865c48e` |
-| Build the project | **blocked** | needs sparse submodules (mesa/linux/llvm ≈ GBs); fetch started, see DEVELOPMENT_LOG |
+| Build the project | **partial** | sources fetched; `stela-driver-gpu` builds and tests in the Intel configuration (654 tests, incl. the xe composite's 352 C objects). Full `stela.efi` (`cargo xtask dist`) not built: needs LLVM for UEFI + the Mesa archives |
 | Understand source architecture | done | `ARCHITECTURE.md` |
 | Identify NVIDIA-specific components | done | `ARCHITECTURE.md` §5 |
 | Identify Intel PCI ID | done | `8086:7d51`, Arc 140T, Xe-LPG+ 12.74 |
@@ -22,7 +22,12 @@ Status vocabulary: **done** / **in progress** / **not started** / **blocked**.
 `GPU_BACKEND_DESIGN.md`: four approaches compared; **xe + ANV + BRW** chosen,
 with the module map, execution flow, memory design and test strategy.
 
-## M3 — Intel GPU initialization  → **not started (upstream ~60 %)**
+## M3 — Intel GPU initialization  → **in progress (build path fixed, probe not run)**
+
+Done in this pass: the Intel-only configuration now compiles at all
+(`build.rs`'s `kbuild` gate, `build/xe.rs`'s import list), and an Arrow Lake
+admission test passes. Not done: firmware wiring, xe probe under Stela, any
+modeset.
 
 Already upstream: xe compiles with shared i915 display; tables generated;
 admission + device query implemented; ANV admitted into the Metal layer.

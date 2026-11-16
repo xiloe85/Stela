@@ -47,6 +47,23 @@ fn an_integrated_gpu_is_built_in_with_xes_platform_name() {
     assert_eq!(platform.sparse_page_bytes, 64 << 10);
 }
 
+/// Arrow Lake-P's Arc 140T (`0x7d51`), the part this port targets: xe's
+/// table gives ARL-H the Meteor Lake platform, whose graphics and media are
+/// discovered through GMD_ID (ARL-H reports graphics 12.74), with a display
+/// engine and no memory of its own.
+#[test]
+fn arrow_lake_is_the_meteor_lake_platform_built_in() {
+    let mut arc = tiger_lake();
+    arc.device_id = 0x7d51;
+    arc.device_type = PhysicalDeviceType::IntegratedGpu;
+    let platform = admit_device(&arc, 0x7d51, attachment(false)).unwrap();
+    assert_eq!(platform.architecture, "METEORLAKE");
+    assert_eq!(platform.location, DeviceLocation::BuiltIn);
+    // Built into the processor, so it reports no link bandwidth.
+    assert_eq!(platform.max_transfer_rate, 0);
+    assert!(!platform.headless && !platform.removable);
+}
+
 #[test]
 fn a_discrete_gpu_is_in_a_slot_or_external_with_its_link() {
     let mut arc = tiger_lake();

@@ -66,11 +66,22 @@ Upstream support status for `0x7D51`:
   `0x7d51`, `0x7d67`, `0x7dd1`), reusing Meteor Lake code paths.
 - **BRW**: Xe-LPG+ compiles through the same BRW backend as MTL; workarounds
   keyed on `GRAPHICS_VERx100 == 1274`.
-- **Stela**: `xe::admits(0x7d51)` succeeds only if the pinned Linux tree's
-  `xe_pci.c`/`xe_pciids.h` carries the ID (it should — the pin is recent);
-  the reported platform name will be **MTL**, because upstream assigns ARL-H
-  to the MTL device descriptor. Expect `architecture: "MTL"` in the Metal
-  device's platform facts unless Stela adds a subplatform name.
+- **Stela** (verified against the pinned tree, Linux 7.2.12): the ID is at
+  `include/drm/intel/pciids.h:803`, inside `INTEL_ARL_H_IDS`, and
+  `drivers/gpu/drm/xe/xe_pci.c:514` maps `INTEL_ARL_IDS(..., &mtl_desc)`.
+  Consequences that matter to the port:
+  - `xe::admits(0x7d51)` **succeeds** — the port's kernel-driver gate is open.
+  - `xe::platform(0x7d51).name` is **`"METEORLAKE"`** (`PLATFORM(METEORLAKE)`
+    stringifies into Stela's generated table), `display = true`,
+    `discrete = false`. So the Metal device will report architecture
+    `METEORLAKE` for an Arrow Lake GPU: upstream's own choice, cosmetically
+    wrong, functionally right. Naming ARL separately would mean deviating
+    from xe's table in `build/xe.rs`.
+  - `dma_mask_size` for this device is **46 bits** (from `mtl_desc`), not a
+    narrower integrated mask; BAR/memory mappings must respect that.
+  - `mtl_desc.require_force_probe = true` at this pin, so xe only binds ARL
+    when force probe is set — Stela's profile already sets
+    `CONFIG_DRM_XE_FORCE_PROBE` for every device in xe's table.
 
 ## 3. Memory — constrained but workable
 
@@ -152,6 +163,12 @@ mux" copy path described in `gpu_status.rs` is not automatically required —
 potentially the panel can be driven directly by xe's display code once the
 stack runs. Brightness, refresh and resolution behaviour are unverified on
 Stela.
+
+**Brightness has a known blocker.** `intel_backlight` is registered through
+`backlight.c`, which finds its device with `class_find_device`; that symbol
+is an `__builtin_trap()` stub in Stela's compat layer (no class device list
+exists). Registering the backlight would therefore fault, so the driver
+core's class/device lists must be implemented before brightness is claimed.
 
 ## 9. Summary table
 
