@@ -526,5 +526,8 @@ The shrink, in three steps:
    2048-sector boundary. macOS takes 120 GB, Linux keeps 363 GiB with ~123 GB
    free.
 
-Not verified yet: that the reboot lands on a 761,610,240-sector mapping and the
-system mounts; that is the next check, before the installer stick is booted.
+Verified after the reboot: `nvme0n1p2` 389,961,220,096 B, `/dev/mapper/root`
+389,944,442,880 B (exactly the filesystem size, the mapping derived from the
+partition as predicted), `/` 364 G with 116 G available, both GPT copies still
+CRC-clean and agreeing, and the system boots normally. The LUKS resize step was
+not needed; the derived size is what made that safe.
