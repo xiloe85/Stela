@@ -938,3 +938,98 @@ last lines on the stick.
 What this does **not** mean: Linux has not finished starting, xe has not
 probed, no firmware has been loaded on the GPU, nothing has drawn anything, and
 macOS has not run. The GPU still does not serve a Metal device.
+
+### Session 9, continued: why the silence, and the way out of it
+
+Two boots (8 total in `/tmp/stick-boot7.txt`) now end at the same place, and the
+second one already carried the per-line store that was meant to bring more
+lines:
+
+    [398.704] GPU START phase=linux claim_ms=234
+    [398.735] LINUX <6> pid_max: default 32768 minimum 301
+    …
+    [398.743] LINUX <6> workingset: timestamp_bits=62 (anon: 57) max_order=21 bucket_order=0 (anon: 0)
+
+Two things were established by reading the code rather than by booting.
+
+**1. `flush_due()` cannot store during this phase, so that earlier change was
+dead on arrival.** `output::flush_where` returns at its first check when
+`engine::inside_host_drivers()` is set, and the whole GPU start runs inside the
+host drivers. The image built for that hypothesis could never have written
+anything. `GpuViews::report` now calls `output::store_usb_log()` at most once a
+second instead — the start's own store, which waits for the device.
+
+**2. The silence is structural, not bad luck.** `workingset_init()` is not part
+of `start_kernel` here: Stela's compatibility layer calls the kernel's init
+functions itself, in `crates/stela-linux/src/compat/kernel/task_bootstrap.c`,
+ending with
+
+    error = workingset_init();
+    if (!error) error = fcntl_init();
+    resource_phase = COMPLETE;
+
+and then creates PID 1 and kthreadd with `kernel_thread`, after which PID 1
+passes two completions that had **no timeout**:
+
+    wait_for_completion(&kthreadd_published);
+    wait_for_completion(&kthreadd_entered);
+
+The loop that would report a stall (`wait_for_child`, which prints every
+`WAIT_REPORT_SECONDS = 2`) can only speak between dispatch steps, and these
+waits happen *inside* one step. So a kthreadd that never runs, or a completion
+that never arrives, produces exactly what the stick holds: complete silence,
+forever, with no watchdog line, because the step never returns.
+
+Note also what the last line actually proves. It is printed from inside
+`workingset_init()` (mm/workingset.c) *before* the function returns, so nothing
+in the record yet says whether that call came back.
+
+### What the next boot is for
+
+The new image names each boundary out loud and bounds each wait:
+
+    stela: built-in initcalls: workingset done (%d)
+    stela: built-in initcalls done; resource roots complete
+    stela: threads: supervisor claimed pid %d
+    stela: threads: kthreadd claimed pid %d
+    stela-kthreadd: running, waiting for its publication
+    stela-kthreadd: entering its loop
+    stela-init: published; waiting for kthreadd
+    stela-init: kthreadd published; waiting for it to enter
+    stela-init: kthreadd entered; starting the workqueues
+
+`kthreadd_published` now times out after 10 s and `kthreadd_entered` after 30 s,
+each into a `panic()` that Stela records, instead of waiting for ever. Whichever
+of those lines is last in the next log names the stall:
+- nothing after `workingset done` → the hang is inside `workingset_init` itself;
+- `threads: kthreadd claimed` but no `stela-kthreadd: running` → kthreadd was
+  created and never dispatched;
+- `stela-init: kthreadd published; waiting for it to enter` alone → PID 1 runs
+  and kthreadd does not;
+- a panic line → the timeout fired and named which completion never came.
+
+### The black screen, explained (hypothesis, testable)
+
+The screen goes black on exactly the boots whose claim succeeded — that is, the
+ones where `reset by Function Level Reset` ran. The framebuffer Stela draws the
+step list into lives in the Intel GPU's aperture, so an FLR of that function
+takes the display with it, and nothing re-initializes it before macOS would.
+Earlier boots refused the register BAR, never reset the GPU, and kept their text
+on screen. That is consistent with every observation so far, and it is not a
+crash: the machine was still running the boot after the screen went dark.
+
+### Tooling: the stick needs no privilege at all
+
+`udisksctl mount -b /dev/sda1` mounts the ESP at
+`/run/media/<user>/EFI` as the logged-in user, and that mount is writable. Both
+jobs that used to need elevation now do not:
+
+    udisksctl mount -b /dev/sda1
+    cp -f target/boot/x86_64-unknown-uefi/release/stela-deploy.efi \
+        /run/media/$USER/EFI/EFI/BOOT/BOOTX64.EFI
+    sync && sha256sum /run/media/$USER/EFI/EFI/BOOT/BOOTX64.EFI
+    udisksctl unmount -b /dev/sda1
+
+The boot log is `EFI/stela/boot.log` on that same partition, so reading it needs
+no raw device access either. Passwordless privilege is therefore not needed for
+this port's test cycle at all.
