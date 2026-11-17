@@ -185,6 +185,25 @@ nothing about this project and burns days in log archaeology.
 
 ## Immediate next actions
 
+Booted after the audit of boot 9, in this order:
+
+1. **Take the display.** `display.rs` assumes binding a GPU hands the console to
+   the driver's front buffer; with no display taken there is none, so the panel
+   is dark and the guest never draws. Either the Intel display engine's KMS
+   display must bind under Stela's xe (modeset on ARL-D), or the firmware's
+   scanout must be re-programmed after the claim's FLR.
+2. **Answer the guest's NVMe shutdown notice** (`SendShutdownNotification`,
+   `CC=0x464001`, the guest's 25 s timeout): every restart currently leaves the
+   controller in a state the guest believes is stuck.
+3. **Add SMC key `AC-R`** (`SMC error: -3`, `unable to kick port micro`).
+4. **Log plumbing, second half**: the emulated console floods the 4 MiB ring
+   (2.2 MB in the last minute), so blank cells and repeated rows should not be
+   stored, and the USB store still goes silent for as long as the guest holds
+   the host drivers' lock.
+5. Then the host devices that never started: Wi-Fi `8086:7740`, USB4 NHI
+   `8086:7ec2`, the I2C trackpad, UCSI, the camera's five interfaces, and the
+   UAC2 audio descriptors.
+
 1. Finish `cargo xtask gpu fetch`, then `cargo xtask gpu anv-test --jobs 2`
    (host packages `spirv-tools`, `spirv-as`, `glslangValidator` and `bwrap`
    are present now; `spirv-llvm-translator` still has to answer).

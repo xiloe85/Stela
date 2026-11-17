@@ -1267,6 +1267,42 @@ appears once the units are dropped.
    bytes — in a 4 MiB ring. A long boot can therefore lose its own beginning.
    Not changed tonight; the capture should drop blank cells and repeat rows.
 
+### What the next boot does, and what to read in it
+
+The stick carries two entries (`EFI/stela/choices.cfg`, 5 s timeout):
+
+    macOS         --system --storage @disk --nor @disk --preboot @disk --ecid …
+                  --external-disks --guest-network --wifi … --input --guest-pes 8
+    Install macOS … --install \stela\install\26A434\payload.json
+                  --development-restore …
+
+`stela.cfg`, which is what the entry with no choice uses, is the "macOS" line:
+no `--install`. `disk.cfg` names the installed system,
+`25491H809160:9C6963CC-C904-4BDA-BFA7-A67446C5466D`. So an untouched boot now
+builds its bundle from the installed macOS on the internal SSD and labels the
+run `Starting macOS`, not `Starting the macOS installer` — boot 9 ran the
+installer because that menu entry was chosen.
+
+The image written to the stick after this audit
+(`607f33ca13844d192a79a65807c62a930d9d01d01650e4744c5e70db935baba2`) differs
+only in what it records: the GPU start's report and step ending are stored from
+inside the start, every step boundary asks for that store first, and the 84 s
+inside the boot services exit is split into three named parts. `BOOTX64-boot9-
+2026-11-18.efi` beside it is the image that installed macOS, kept for rollback.
+
+Read in the next log, in this order:
+
+1. `GPU START claim_ms=… linux_ms=… probe_ms=… total_ms=…` — present at all?
+   `probe_ms` above zero means the probe stage ran; `linux_ms` is its start.
+2. The step's ending: `[ok]` `Starting the GPU (… s)` versus a warn line with
+   `gpu_status::failed`, which names the driver error.
+3. `GPU <name>: display runs WxH at … mHz` or `no display after … ms: …`, or
+   `DISPLAY no GPU display yet` — whether the panel ever had a picture.
+4. `STEP Starting macOS` and whether the run reaches the guest's console
+   (`GUEST|` rows) or stops before it.
+5. `STEP DETAIL the firmware's last boot services` / `the firmware's boot
+   services end` / `the engine's fault reporting` — which of the ~90 s owns it.
+
 Also noted, minor: `HEAP … cores=-43400M/…` prints a negative share for one
 core. The figure is a per-core allocation-versus-free counter, so a block
 allocated on one core and freed on another drives it negative; the size is
