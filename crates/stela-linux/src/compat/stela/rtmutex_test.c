@@ -17,7 +17,10 @@ void stela_linux_rt_mutex_test_run(void *opaque);
 
 static struct rt_mutex first, second;
 static unsigned int high_entered, high_done, middle_done, medium_done;
-static struct task_struct *owner, *middle, *high_task;
+/* Recorded by the fixture and read by the assertions the fuller test build
+ * adds; the source-only build sets them without reading them. */
+static struct task_struct *owner __maybe_unused, *middle __maybe_unused,
+	*high_task __maybe_unused;
 
 static void wait_for(const unsigned int *value, unsigned int expected)
 {

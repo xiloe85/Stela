@@ -22,7 +22,7 @@ void __real_call_rcu(struct rcu_head *, rcu_callback_t);
 static _Thread_local bool capture_allocation, forbid_free, forbid_enqueue;
 static _Thread_local void *captured_base;
 static _Thread_local const struct rcu_head *expected_callback;
-static _Thread_local unsigned int captured_frees, queued;
+static _Thread_local unsigned int captured_frees, queued __maybe_unused;
 static _Thread_local unsigned long required_cookie;
 
 void *__wrap_stela_linux_heap_alloc(size_t size, size_t align)

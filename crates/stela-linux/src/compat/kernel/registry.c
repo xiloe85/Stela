@@ -35,7 +35,9 @@ static const struct stela_linux_registry_image *owned_image;
 static bool permanently_retired;
 #if defined(STELA_LINUX_REGISTRY_TEST) || defined(STELA_LINUX_REGISTRY_SOURCE_TEST)
 static bool fail_registry_allocation;
-static size_t registry_allocations, registry_releases;
+/* Read only by the assertion blocks of `STELA_LINUX_REGISTRY_TEST`; the source
+ * test alone builds the increments without them, which `-Werror` refuses. */
+static size_t registry_allocations __maybe_unused, registry_releases __maybe_unused;
 #endif
 
 struct call_guard {

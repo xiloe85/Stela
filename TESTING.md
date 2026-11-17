@@ -134,3 +134,28 @@ wait expires before the image drives the host exit port); judge by the serial.
 
 `--storage-check` is not usable in this tree: it probes without a native mount,
 so no disk can come up (see `KNOWN_LIMITATIONS.md`).
+
+## The hosted test lane does not build on a current clang (2026-11-17)
+
+`cargo test -p stela-linux --features hosted-test-support` fails before it runs a
+single test. clang 18 and later add `-Wunused-but-set-global`, and this crate
+compiles its test C files with `-Werror`, so every fixture that records a value
+for assertions that a fuller test build adds — but the source-only build does not
+— stops the compile. It fails one file at a time, and each round costs a full C
+rebuild of the compatibility kernel, so the sweep is slow:
+
+| File | Recorded global |
+|---|---|
+| `src/compat/kernel/registry.c` | `registry_allocations`, `registry_releases` |
+| `src/compat/stela/rtmutex_test.c` | `owner`, `middle`, `high_task` |
+| `src/compat/stela/deferred_free_test.c` | `queued` |
+
+All three are fixed with `__maybe_unused`; the next diagnostic appears
+immediately after the third, so the sweep is unfinished. The pattern is
+mechanical (`__maybe_unused` on the named global) and safe, but it has to be
+repeated until the lane links.
+
+**Why this matters here:** it is the reason the hardware stall in M3 — the boot
+that stops after `workingset` — could not be reproduced off the laptop. Until
+the lane builds, every question about the Linux task bootstrap has to be
+answered by a physical boot.
