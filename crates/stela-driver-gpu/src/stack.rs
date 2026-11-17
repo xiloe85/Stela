@@ -429,6 +429,20 @@ mod tests {
         assert!(crate::xe::admits(&unknown).is_err());
     }
 
+    #[cfg(feature = "xe-port")]
+    #[test]
+    fn intel_is_selected_for_the_laptops_arc_140t_of_arrow_lake_h() {
+        // Arrow Lake H's Arc 140T, this laptop's own GPU at PCI 8086:7d51,
+        // which xe's table holds under its Meteor Lake platform.
+        let mut arrow_lake_h = adapter(0x8086);
+        arrow_lake_h.device = 0x7d51;
+        let intel = GpuStack::select(&arrow_lake_h).unwrap();
+        assert!(core::ptr::eq(intel, &INTEL));
+        assert_eq!(intel.kernel.driver, "xe");
+        assert_eq!(intel.kernel.dma_limit(&arrow_lake_h), (1 << 46) - 1);
+        assert!((intel.kernel.integrated)(&arrow_lake_h));
+    }
+
     #[test]
     fn each_vendor_has_one_stack_and_a_usable_dma_mask() {
         for (index, stack) in STACKS.iter().enumerate() {

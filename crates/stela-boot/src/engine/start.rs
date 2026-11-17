@@ -1477,6 +1477,22 @@ fn open_gpus(
     // Named on the screen when no GPU starts; the claim takes `adapters`.
     let found = adapters.clone();
     let claiming = host::rdtsc();
+    // The claim's budget ends only when its one step returns, so name the
+    // phase a stop there names, and say when it begins: a claim that never
+    // returns leaves this line the USB's last, not just the step's.
+    static CLAIM: &str = "the GPUs' claim";
+    struct Staged;
+    impl Drop for Staged {
+        fn drop(&mut self) {
+            super::step_watchdog::clear_stage();
+        }
+    }
+    super::step_watchdog::stage(&CLAIM);
+    let _staged = Staged;
+    output::arguments(format_args!(
+        "{}\n",
+        stela_boot_core::gpu_status::phase_entered(0, None)
+    ));
     let claimed = work.call_owned(60_000_000, move || {
         let services = services::Services::new(mmio, remappers, None, heap, tsc_hz, Vec::new())
             .with_guest_ram(guest_ram);
@@ -1539,7 +1555,17 @@ fn open_gpus(
         heap_bytes,
     };
     // Store the claim's lines before Linux starts, so the USB keeps them
-    // even when the start never returns.
+    // even when the start never returns. The line names the phase the
+    // start reached next, Linux's kernel start, whose waiting for its
+    // first tasks and then for the GPU's probe reports itself.
+    let ms = |ticks: u64| ticks / (tsc_hz / 1000).max(1);
+    output::arguments(format_args!(
+        "{}\n",
+        stela_boot_core::gpu_status::phase_entered(
+            1,
+            Some(ms(host::rdtsc().wrapping_sub(claiming)))
+        )
+    ));
     output::flush_log();
     let opening = host::rdtsc();
     // A stop inside the start stores the USB's log from there.
@@ -1547,7 +1573,6 @@ fn open_gpus(
     // `GPU START claim_ms=… linux_ms=… probe_ms=… total_ms=…`: claiming the
     // functions, starting Linux, and nouveau's probe, which boots the GSP
     // and binds DRM.
-    let ms = |ticks: u64| ticks / (tsc_hz / 1000).max(1);
     let (linux, probe) = gpu::start_times();
     output::arguments(format_args!(
         "GPU START claim_ms={} linux_ms={} probe_ms={} total_ms={}\n",

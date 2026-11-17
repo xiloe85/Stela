@@ -24,6 +24,25 @@ pub enum Reason {
     Other,
 }
 
+/// The phases "Starting the GPU" runs, in the order the boot reaches
+/// them: claiming the GPUs from probe, starting Linux over them, and
+/// their driver's probe. Each phase's entry line is printed as it begins
+/// and stored on the USB, so a phase that never returns is the last one
+/// named there.
+pub const PHASES: [&str; 3] = ["claim", "linux", "probe"];
+
+/// The line printed entering the phase `index` of [`PHASES`], with the
+/// claim's milliseconds once it has ended: the boot screen and the USB's
+/// log then name the phase a start that never returns reached, which
+/// otherwise shows only the step's first line.
+pub fn phase_entered(index: usize, claim_ms: Option<u64>) -> String {
+    match (PHASES.get(index), claim_ms) {
+        (Some(&phase), Some(claim_ms)) => format!("GPU START phase={phase} claim_ms={claim_ms}"),
+        (Some(&phase), None) => format!("GPU START phase={phase}"),
+        (None, _) => String::from("GPU START phase=unknown"),
+    }
+}
+
 /// The screen line for the NVIDIA GPU `device` at PCI `address` that did
 /// not start for `reason`, `why` the refusal's own words (empty without
 /// any): a screen is often all a report brings.
@@ -259,6 +278,14 @@ pub fn none(adapters: &[Adapter]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_start_names_each_phase_it_reaches() {
+        assert_eq!(phase_entered(0, None), "GPU START phase=claim");
+        assert_eq!(phase_entered(1, Some(214)), "GPU START phase=linux claim_ms=214");
+        assert_eq!(phase_entered(2, None), "GPU START phase=probe");
+        assert_eq!(phase_entered(3, None), "GPU START phase=unknown");
+    }
 
     #[test]
     fn a_refused_gpu_is_named_with_its_fix() {

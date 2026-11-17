@@ -1520,6 +1520,10 @@ pub(super) fn claim_all(
                 refused.push(refused_as(adapter, reason, &error));
             }
         }
+        // The next claim may never return, as the first stuck access to a
+        // GPU shows: keep this one's lines on the USB, so its refusal, or
+        // that it was reached, is the last line there.
+        output::flush_log();
     }
     (claimed, refused)
 }
@@ -1780,6 +1784,17 @@ pub(super) fn serve(
 /// Bring Linux up over `claimed`, and return once nouveau has bound them or
 /// failed, as the guest should not start with a half-started GPU beneath it.
 pub(super) fn open(machine: Machine, claimed: Vec<Claimed>) -> Result<(), Error> {
+    // Name the phase before Linux's first tasks are waited for: a stop or
+    // stuck step in the environment's mounting names this, and the waiting
+    // below names its own stages.
+    struct Staged;
+    impl Drop for Staged {
+        fn drop(&mut self) {
+            super::step_watchdog::clear_stage();
+        }
+    }
+    super::step_watchdog::stage(&PREPARE);
+    let _staged = Staged;
     // Keep the exact original claims on every partial startup refusal.
     let claimed = ManuallyDrop::new(claimed);
     let Machine {
@@ -1999,6 +2014,10 @@ fn mount_and_start(
     let ready = unsafe { srcu.join() }.map_err(|failure| Error::Srcu(failure.error))?;
     let probing = host::rdtsc();
     START_TICKS[0].store(probing.wrapping_sub(started), Ordering::Relaxed);
+    output::arguments(format_args!(
+        "{}\n",
+        stela_boot_core::gpu_status::phase_entered(2, None)
+    ));
     let completed = Rc::new(Cell::new(None));
     let job = Box::pin(Start {
         kernel: owner.as_ref(),
@@ -2029,6 +2048,9 @@ fn mount_and_start(
 /// The start's stages [`wait_for_child`] names.
 static FIRST_TASKS: &str = "Linux's first tasks";
 static PROBE: &str = "the GPU's probe";
+/// [`open`]'s own preparation, before Linux's first tasks run: a stop or
+/// stuck step there names this, not the generic driver work.
+static PREPARE: &str = "Linux's GPU environment";
 
 /// Wait for `stage` of the start, which Linux's tasks run, until `finished`
 /// or `deadline` on `time`. A long wait says every

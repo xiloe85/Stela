@@ -158,8 +158,9 @@ mod tests {
         for device in [0x9a49, 0x46a6, 0xa7a0, 0x4905] {
             assert_eq!(mask_bits(device), Some(39), "{device:04x}");
         }
-        // Arc A-series, Meteor Lake, Lunar Lake and Battlemage: 46 bits.
-        for device in [0x56a0, 0x7d55, 0x64a0, 0xe20b] {
+        // Arc A-series, Arrow Lake H, Meteor Lake, Lunar Lake and
+        // Battlemage: 46 bits.
+        for device in [0x56a0, 0x7d51, 0x7d55, 0x64a0, 0xe20b] {
             assert_eq!(mask_bits(device), Some(46), "{device:04x}");
         }
         // Ice Lake and Ivy Bridge are not xe's.
@@ -173,6 +174,8 @@ mod tests {
         assert_eq!(PLATFORMS.len(), DEVICES.len());
         let name = |device| platform(device).map(|platform| platform.name);
         assert_eq!(name(0x9a49), Some("TIGERLAKE"));
+        // Arrow Lake H sits under the Meteor Lake platform in xe's table.
+        assert_eq!(name(0x7d51), Some("METEORLAKE"));
         // Raptor Lake P is a subplatform of Alder Lake P in xe's table.
         assert_eq!(name(0xa7a0), Some("ALDERLAKE_P"));
         assert_eq!(name(0x56a0), Some("DG2"));
@@ -187,12 +190,12 @@ mod tests {
     fn discrete_is_the_descriptors_is_dgfx_through_its_macros() {
         // DG1 sets it through `DGFX_FEATURES`, the Arc A-series and Flex
         // through `DG2_FEATURES`, which includes that, and Battlemage
-        // directly; Tiger Lake, Alder Lake P, Meteor Lake and Lunar Lake are
-        // built into the processor.
+        // directly; Tiger Lake, Alder Lake P, Arrow Lake H, Meteor Lake and
+        // Lunar Lake are built into the processor.
         for device in [0x4905, 0x56a0, 0x56c0, 0xe20b] {
             assert!(platform(device).unwrap().discrete, "{device:04x}");
         }
-        for device in [0x9a49, 0x46a6, 0x7d55, 0x64a0] {
+        for device in [0x9a49, 0x46a6, 0x7d51, 0x7d55, 0x64a0] {
             assert!(!platform(device).unwrap().discrete, "{device:04x}");
         }
         let adapter = |device| Adapter {
@@ -278,9 +281,9 @@ mod tests {
 
     #[test]
     fn force_probe_is_the_tables_mark_of_each_platform() {
-        // Tiger Lake, Alder Lake P, Raptor Lake P, DG1, Arc A-series and
-        // Meteor Lake bind only by force probe.
-        for device in [0x9a49, 0x46a6, 0xa7a0, 0x4905, 0x56a0, 0x7d55] {
+        // Tiger Lake, Alder Lake P, Raptor Lake P, DG1, Arc A-series,
+        // Arrow Lake H and Meteor Lake bind only by force probe.
+        for device in [0x9a49, 0x46a6, 0xa7a0, 0x4905, 0x56a0, 0x7d51, 0x7d55] {
             assert!(force_probed(device), "{device:04x}");
         }
         // Lunar Lake and Battlemage bind without it; a device outside the
