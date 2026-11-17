@@ -22,7 +22,7 @@ Status vocabulary: **done** / **in progress** / **not started** / **blocked**.
 `GPU_BACKEND_DESIGN.md`: four approaches compared; **xe + ANV + BRW** chosen,
 with the module map, execution flow, memory design and test strategy.
 
-## M3 — Intel GPU initialization  → **in progress (the claim reaches the hardware and is refused at the register BAR; fixed, not yet re-run)**
+## M3 — Intel GPU initialization  → **in progress (the claim succeeds on the real Arc 140T; the boot now stops inside Linux's first tasks, before the probe)**
 
 Done: the Intel-only configuration compiles (`build.rs`'s `kbuild` gate,
 `build/xe.rs`'s import list), an Arrow Lake admission test passes, the xe
@@ -38,9 +38,29 @@ assigns GTTMMADR prefetchable (`Region 0: Memory at 8010000000 (64-bit,
 prefetchable) [size=16M]`, as Linux reports the same device with `i915`
 bound), and `cold::register_bar` was enforcing nouveau's non-prefetchable
 rule on every vendor. That rule is now per-stack
-(`Kernel::prefetchable_registers`). Nothing is proven by it until the claim
-is run again.
-Not done: xe probe under Stela, firmware load, GuC/HuC/GSC claim, any modeset.
+(`Kernel::prefetchable_registers`).
+
+That rule was run again in session 9, and **the claim passed on the physical
+graphics card**:
+
+    GPU 0000:00:02.0: reset by Function Level Reset; kept BAR0 16 MiB, BAR2 256 MiB
+    GPU START phase=linux claim_ms=234
+
+so the register BAR was admitted, every memory BAR mapped against the host's
+aperture, the function reset by FLR and the cold bind completed in 234 ms. That
+is the first time Stela has taken this GPU. The same session also removed the
+17-minute handoff (1056 s → 36 s; the 774 s was one log line per INIT delivery,
+which now reports `ms=0`), so the GPU stage is reached in about a minute.
+
+What it then does is stop inside Linux's own first tasks: two boots end after
+seven `LINUX` lines, the last from inside `workingset_init()`, with no panic,
+no watchdog stop and nothing further. The waits that follow it had no bound and
+run inside one dispatch step, so that stop is silent by construction; session 9
+bounds and names them. What the next boot decides is enumerated in
+`DEVELOPMENT_LOG.md`.
+
+Not done: the rest of Linux's start, xe probe under Stela, firmware load,
+GuC/HuC/GSC claim, any modeset.
 
 Already upstream: xe compiles with shared i915 display; tables generated;
 admission + device query implemented; ANV admitted into the Metal layer.

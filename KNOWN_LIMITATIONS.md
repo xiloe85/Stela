@@ -14,6 +14,35 @@ an Intel GPU under Stela**. Upstream states this in the code comment:
 - Level 5 (a Metal shader through the Intel backend) — **not achieved**.
 - Levels 6–10 — **not achieved**.
 
+## 1a. The Intel boot stops inside Linux's own first tasks, and does so silently
+
+On the physical machine the claim now succeeds (M3), and Stela then starts its
+Linux to run the GPU's driver. Two boots (2026-11-17) stop after seven `LINUX`
+lines, the last of them printed from inside `workingset_init()`:
+
+    LINUX <6> workingset: timestamp_bits=62 (anon: 57) max_order=21 bucket_order=0 (anon: 0)
+
+No panic follows, no step-watchdog stop follows, and nothing more is written.
+That is not slowness and not a display fault: it is the shape of the code. The
+built-in initcalls end at `workingset_init()`/`fcntl_init()`, after which PID 1
+passes two completions that had **no timeout**, and those waits run inside one
+dispatch step — and the loop that would report a stuck step can only speak
+between steps.
+
+So this limitation is currently **unlocalised**: we know the boot stops between
+`workingset_init` and the workqueue start, and we cannot yet say which. The
+image built on 2026-11-17 names every one of those boundaries and bounds both
+waits (10 s and 30 s, into a recorded panic), which converts the silence into
+an answer on the next boot. Until that boot happens, nothing here should be
+read as "the probe is close".
+
+Related, and also observed: **the screen goes black exactly when the claim
+succeeds.** The strongest explanation is that the flicker-free framebuffer Stela
+draws the step list into lives in the Intel GPU's aperture, and the claim's
+Function Level Reset takes the display down with it. It is consistent with every
+boot so far (refused claims kept their text; successful claims went dark) but it
+is a hypothesis, not a measurement.
+
 ## 2. The internal SSD is behind Intel VMD (blocker for installing macOS)
 
 Verified on the machine: `8086:7d0b` RST VMD is active, the NVMe controller
