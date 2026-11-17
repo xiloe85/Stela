@@ -123,6 +123,12 @@ const START_SECONDS: u64 = 60;
 const WAIT_MICROS: u64 = 10_000;
 /// How often a long wait in the start says where it is ([`wait_for_child`]).
 const WAIT_REPORT_SECONDS: u64 = 2;
+/// The least time between the stores of the USB's log that Linux's own lines
+/// ask for: each one waits for the device, and Linux's early lines arrive in
+/// bursts of microseconds ([`GpuViews::report`]).
+const LINUX_STORE_MS: u64 = 1_000;
+/// When that store last ran, by [`host::rdtsc`].
+static LINUX_LOG_STORED: AtomicU64 = AtomicU64::new(0);
 /// The longest one pump runs Linux between the boot PE's slices. What is
 /// still runnable stays pending for the next, so a busy driver shares the
 /// boot CPU with the guest and the host's devices instead of holding it.
@@ -559,11 +565,16 @@ impl Host {
     fn report(&self, line: core::fmt::Arguments<'_>) {
         output::arguments(format_args!("LINUX {line}\n"));
         // The GPU start runs no service loop beside Linux, so nothing else
-        // flushes the USB's log here: a start that never returns left the
-        // stick's record at its last pre-start line (boot-log-hardware,
-        // 2026-11-17: seven Linux lines, then silence). This starts the
-        // stores that are due and never waits for a device.
-        output::flush_due();
+        // stores the USB's log here: a start that never returns left the
+        // stick's record at its last pre-start line (2026-11-17: seven Linux
+        // lines, then silence). `flush_due` cannot help — inside the host
+        // drivers it stores nothing and says so — so this asks for the start's
+        // own store, which waits. That wait is why it is taken at most once a
+        // second: Linux's early lines arrive in bursts of a few microseconds.
+        if output::millis_since(LINUX_LOG_STORED.load(Ordering::Relaxed)) >= LINUX_STORE_MS {
+            LINUX_LOG_STORED.store(host::rdtsc(), Ordering::Relaxed);
+            output::store_usb_log();
+        }
     }
 
     /// Whether Linux runs on a processor in the boot CPU's place, which

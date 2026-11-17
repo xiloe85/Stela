@@ -153,12 +153,14 @@ int stela_linux_task_bootstrap_resources(const struct stela_linux_owner *owner)
     pidfs_init();
     /* Run the original built-in initcalls before publishing root readiness. */
     error = workingset_init();
+    pr_info("stela: built-in initcalls: workingset done (%d)\n", error);
     if (!error)
         error = fcntl_init();
     if (error) {
         resource_phase = FAILED;
         return error;
     }
+    pr_info("stela: built-in initcalls done; resource roots complete\n");
 
     /* This means ONLY these actual helpers returned on the retained Initial.
      * PID1/kthreadd, scheduler start, full original WQ/rescuers, SRCU probes and
@@ -230,8 +232,16 @@ static int native_kernel_supervisor(void *argument)
     /* Genuine completion waits drop all transient native process permits;
      * only the actual source task and retained callback/request owners remain.
      * Kthreadd must have reached its real original create-info loop first. */
-    wait_for_completion(&kthreadd_published);
-    wait_for_completion(&kthreadd_entered);
+    /* Bounded, and said before each wait: an unbounded wait here is silence by
+     * construction, as the dispatcher step that runs this never returns to the
+     * loop that would report it. */
+    pr_info("stela-init: published; waiting for kthreadd\n");
+    if (!wait_for_completion_timeout(&kthreadd_published, msecs_to_jiffies(10000)))
+        panic("stela-init: kthreadd was never published");
+    pr_info("stela-init: kthreadd published; waiting for it to enter\n");
+    if (!wait_for_completion_timeout(&kthreadd_entered, msecs_to_jiffies(30000)))
+        panic("stela-init: kthreadd never entered its loop");
+    pr_info("stela-init: kthreadd entered; starting the workqueues\n");
     if (current != native_supervisor)
         __builtin_trap();
     gfp_allowed_mask = __GFP_BITS_MASK;
@@ -261,9 +271,11 @@ void stela_linux_task_kthreadd_started(void)
     if (stela_linux_require_current(owner) || task_pid_nr(current) != 2 ||
         !stela_linux_task_resource_roots_complete(owner))
         __builtin_trap();
+    pr_info("stela-kthreadd: running, waiting for its publication\n");
     wait_for_completion(&kthreadd_published);
     if (current != kthreadd_task || thread_phase != THREADS_PUBLISHED)
         __builtin_trap();
+    pr_info("stela-kthreadd: entering its loop\n");
     /* Called from genuine original kthreadd after its source context setup,
      * immediately before the original create-info service loop. */
     complete(&kthreadd_entered);
@@ -308,6 +320,7 @@ int stela_linux_task_bootstrap_threads(const struct stela_linux_owner *owner)
     native_supervisor->flags |= PF_NO_SETAFFINITY;
     rcu_read_unlock();
 
+    pr_info("stela: threads: supervisor claimed pid %d\n", pid);
     pid = kernel_thread(kthreadd, NULL, "kthreadd", CLONE_FS | CLONE_FILES);
     if (pid < 0) {
         thread_phase = THREADS_FAILED;
@@ -315,6 +328,7 @@ int stela_linux_task_bootstrap_threads(const struct stela_linux_owner *owner)
     }
     if (pid != 2)
         __builtin_trap();
+    pr_info("stela: threads: kthreadd claimed pid %d\n", pid);
     rcu_read_lock();
     kthreadd_task = find_task_by_pid_ns(pid, &init_pid_ns);
     if (!kthreadd_task)
