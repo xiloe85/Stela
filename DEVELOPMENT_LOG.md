@@ -626,3 +626,109 @@ space both satisfy the installer's minimum (`DEFAULT_MIN_APPLE_BYTES` = 60 GB).
 a GeForce GTX 16 …` is printed on a machine whose only GPU is Intel. It is
 cosmetic, it misleads every reader of a log, and it is still unexplained; it
 belongs to the GPU census's message path, not to this session's work.
+
+A later photograph at full size settles what the line actually says:
+`No NVIDIA graphics card found: macOS can be installed, but it starts only
+with a GeForce GTX 15 or RTX 20, 30, 40 or 50 series card.` It is not garbled
+output — it is the NVIDIA refusal's text, printed on every machine without an
+NVIDIA GPU, and it was misread from an earlier, smaller photograph. The wording
+is still wrong for an Intel machine (it claims macOS "can be installed" while
+implying only NVIDIA starts it), so it stays on the list as a message bug, not a
+translation bug.
+
+## Session 7: the install completes, and the GPU step is the wall
+
+### What the hardware did
+
+With VMD off and the payload on `p3`, the stick's install boot got past every
+step that failed before. The `270 s` stall in `Taking control of the other
+processors` was transient: the same step took `30 s` on the next boot and
+`36 s` earlier, and no `NATIVE AP startup failed` line was ever printed. The
+install then ran to completion and restarted the machine on its own, and the
+table's count moved from five partitions to six (`Starting the PC's disks and
+USB devices (6 partition, 3 s)`).
+
+That reboot is the milestone: macOS 27.0.1 is on the internal NVMe, installed
+with no network, leaving `p1` and `p2` untouched.
+
+### Where it stops now
+
+The next boot's screen names the difference in one line:
+`Starting macOS` instead of `Starting the install media`. It then stops on:
+
+    [ ] Starting the GPU
+
+and never returns — over ten minutes, with no warning and no fatal message.
+That is expected for this hardware and is upstream's own documented limit:
+Stela starts a GPU through its NVIDIA driver, its hardware requirements name a
+GeForce GTX 16 or RTX 20/30/40/50 series, and an Intel-only machine ends with
+`STELA FATAL macOS cannot run without a GPU` (`Vendor::Intel => "Intel i915/xe
+are not ported to Stela"`). macOS requires a Metal device, so there is no
+software-rendering fallback to fall back to.
+
+The Apple logo and progress bar seen during all of this are drawn by Stela
+before the guest starts, which is why the installer could render while the
+installed system cannot.
+
+### What was learned about the Intel path
+
+The pinned xe table does hold this laptop's GPU: `8086:7D51` sits in
+`INTEL_ARL_H_IDS` in `include/drm/intel/pciids.h` and `xe_pci.c:514` binds that
+family to `&mtl_desc`. So xe reports **METEORLAKE** for Arrow Lake H, with a
+46-bit DMA mask, `is_dgfx` false (integrated), and the force-probe mark (xe
+there is experimental upstream). That is now asserted by tests rather than
+assumed:
+
+- `crates/stela-driver-gpu/src/stack.rs`: `GpuStack::select` picks `INTEL` for
+  `0x7d51`, driving xe, `(1 << 46) - 1` DMA limit, integrated.
+- `crates/stela-driver-gpu/src/xe.rs`: `0x7d51` is in the 46-bit group, is named
+  `METEORLAKE`, is not discrete, and is force-probed.
+- `xtask/src/gpu/anv.rs` already listed `7d51` (as "Arrow Lake P"), so the ANV
+  host lane covers this GPU without a change.
+
+### The silent-hang fix
+
+Because the step had no reportable boundary, the boot could not say where it
+stopped. `Starting the GPU` now names its phase before entering it, on screen
+and in the USB log (`output::flush_log` after each claim), through
+`stela_boot_core::gpu_status::phase_entered`:
+
+| line | when |
+|---|---|
+| `GPU START phase=claim` | before `claim_all` |
+| `GPU START phase=linux claim_ms=N` | after the claim, before Linux starts |
+| `GPU START phase=probe` | once Linux's first tasks are up, before the driver's probe |
+
+The claim also flushes the USB log after each adapter, so the first stuck access
+leaves a refusal line behind rather than nothing. `engine::step_watchdog`
+carries the stage name while each phase runs (`the GPUs' claim`, `Linux's GPU
+environment`), so a stop inside one names it.
+
+### Verification (this session, on this machine)
+
+| command | result |
+|---|---|
+| `cargo test -p stela-driver-gpu` | `DRIVER_GPU_EXIT=0` |
+| `cd crates/stela-boot && cargo check --features xe --target x86_64-unknown-uefi` | `BOOT_XE_EXIT=0`, 3m57s |
+| `cargo test -p stela-boot-core` | `CORE_TEST_EXIT=0` |
+
+The second line is the first proof that the boot image can be built with the
+Intel stack linked — `crates/stela-boot`'s `xe` feature pulls
+`stela-drivers/xe-port`. The shipped image still requests only `nouveau-port`,
+so this changes no default and nothing about how NVIDIA machines boot. Nothing
+here was booted; the diagnostics and the xe-linked image are compiled, not run.
+
+### How the work was done
+
+Four `opencode` agents (`opencode/glm-5.3-flash-free`) ran in isolated git
+worktrees on the roadmap's M3 items. Two produced usable diffs (the `0x7d51`
+admission tests and the phase diagnostics) and those were reviewed and applied
+by hand; the other two were still searching when the provider's free usage limit
+ended the run (`Free usage limit reached`), so their worktree edits were
+discarded, not merged. Worktrees were removed afterwards.
+
+Not done, in the roadmap's order: GuC/HuC/GSC/DMC firmware selection for the
+Meteor Lake descriptor, the xe probe itself (BAR, DMA mask, IRQ domain, PPGTT,
+memory region), and the display path. Until the probe binds a DRM node, ANV has
+nothing to open and `GpuStack::INTEL.vulkan` stays `None` — deliberately, since
+no silent software fallback is allowed.

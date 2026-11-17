@@ -22,7 +22,7 @@ Status vocabulary: **done** / **in progress** / **not started** / **blocked**.
 `GPU_BACKEND_DESIGN.md`: four approaches compared; **xe + ANV + BRW** chosen,
 with the module map, execution flow, memory design and test strategy.
 
-## M3 — Intel GPU initialization  → **in progress (selection proven on hardware, probe not run)**
+## M3 — Intel GPU initialization  → **in progress (selection and image build proven, probe not run)**
 
 Done: the Intel-only configuration compiles (`build.rs`'s `kbuild` gate,
 `build/xe.rs`'s import list), an Arrow Lake admission test passes, the xe
@@ -34,18 +34,33 @@ Not done: xe probe under Stela, firmware load, GuC/HuC/GSC claim, any modeset.
 
 Already upstream: xe compiles with shared i915 display; tables generated;
 admission + device query implemented; ANV admitted into the Metal layer.
-Missing, in order:
+Status of the missing steps:
 
-1. Enable `xe-port` in the image (`crates/stela-boot/Cargo.toml` currently
-   requests only `nouveau-port`), and prove `cargo check` + boot.
-2. Confirm the pinned `xe_pci.c` carries `0x7d51` and what platform name it
-   reports (expect MTL). Add a subplatform/ARL name if it is worth it.
-3. Wire GuC/HuC/GSC/DMC firmware selection for ARL into the claim path
-   (recipes exist; the caller exists for nouveau only).
+1. **compiles, not default** — `crates/stela-boot`'s `xe` feature already
+   pulls `stela-drivers/xe-port`, and
+   `cd crates/stela-boot && cargo check --features xe --target
+   x86_64-unknown-uefi` finishes green (3m57s, `BOOT_XE_EXIT=0`,
+   DEVELOPMENT_LOG session 7). The shipped image still requests only
+   `nouveau-port`, so an Intel GPU is refused before the claim; flipping that
+   default belongs with the probe, not before it, so no machine loses the
+   boot it has today.
+2. **done** — the pinned table holds `0x7D51` (`INTEL_ARL_H_IDS`,
+   `include/drm/intel/pciids.h`) and `xe_pci.c:514` binds it to `&mtl_desc`.
+   xe therefore reports **METEORLAKE** for this GPU: 46-bit DMA mask,
+   `is_dgfx` false, force-probe. Asserted by tests in `stack.rs` and `xe.rs`;
+   `xtask/src/gpu/anv.rs` already listed `7d51`, so ANV's host lane covers it.
+3. Wire GuC/HuC/GSC/DMC firmware selection for the Meteor Lake descriptor into
+   the claim path (recipes exist; the caller exists for nouveau only). The
+   names to select are the ones the descriptor's own feature macros request —
+   nothing for Arrow Lake H is bundle-resident yet.
 4. Bring up xe probe inside Stela's Linux environment: BAR0 mapping, DMA
-   mask 39 bits, interrupts/IRQ domain, PPGTT, memory region.
+   mask 46 bits (not 39 — the descriptor's `dma_mask_size`), interrupts/IRQ
+   domain, PPGTT, memory region.
 5. Display: hand the VBT (OpRegion reader exists, no caller) to xe's display
    code; get a modeset on eDP.
+6. **done** — the step names its phase before entering it (`GPU START
+   phase=claim|linux|probe`, flushed to the USB log), so a start that never
+   returns names where it stopped instead of hanging silently.
 
 Acceptance: Stela's boot log shows xe binding `8086:7d51`, GT/GuC
 initialised, a DRM render node present, and KMS presenting a frame.
@@ -103,9 +118,11 @@ nothing about this project and burns days in log archaeology.
 ## Immediate next actions
 
 1. Finish `cargo xtask gpu fetch`, then `cargo xtask gpu anv-test --jobs 2`
-   (blocked on host packages: `spirv-tools`, `spirv-llvm-translator`, see
-   TESTING.md).
-2. Add `7d51` to `xtask/src/gpu/anv.rs`'s platform list so the Intel test
-   covers this laptop's exact GPU.
-3. Add an Arrow Lake admission test next to the Tiger Lake/DG2 ones.
-4. Enable `xe-port` in `stela-boot` behind a feature and build the image.
+   (host packages `spirv-tools`, `spirv-as`, `glslangValidator` and `bwrap`
+   are present now; `spirv-llvm-translator` still has to answer).
+2. ~~Add `7d51` to `xtask/src/gpu/anv.rs`~~ — already listed ("Arrow Lake P";
+   xe's own descriptor calls the family Meteor Lake).
+3. ~~Add an Arrow Lake admission test~~ — done in `stack.rs`/`xe.rs`.
+4. ~~Enable `xe-port` in `stela-boot` behind a feature and build~~ — the
+   feature exists and the image checks green with it; making it the default
+   waits on item 4 of M3.
