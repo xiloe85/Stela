@@ -954,6 +954,7 @@ fn load(
         }
     ));
     crate::status::progress("stopping the firmware's processors");
+    let quiescing = rdtsc();
     // SAFETY: interrupts are masked, the BSP alone sends ICR commands, and `capture` lists the
     // enabled firmware APs.
     let deliveries = match unsafe {
@@ -967,7 +968,8 @@ fn load(
         }
     };
     output::arguments(format_args!(
-        "NATIVE FIRMWARE INIT deliveries={deliveries}; delivery only, no execution acknowledgement\n"
+        "NATIVE FIRMWARE INIT deliveries={deliveries}; delivery only, no execution acknowledgement ms={}\n",
+        rdtsc().wrapping_sub(quiescing) / (tsc_hz / 1000).max(1)
     ));
     crate::status::done("");
     // Keep this post-EBS boundary when the relocated engine replays status.

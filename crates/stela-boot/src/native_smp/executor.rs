@@ -414,10 +414,11 @@ pub(crate) unsafe fn quiesce_firmware_aps(
             cause,
         })?;
         delivered += 1;
-        crate::output::arguments(format_args!(
-            "NATIVE FIRMWARE INIT delivered apic={id:#x} firmware_cpu={} destination_ack=unobserved\n",
-            processor.processor_number,
-        ));
+        // No line per delivery: on this port's AMI firmware the lines cost
+        // far more than the deliveries they named (boot-log-hardware, 2026-11-17:
+        // 15 deliveries ~48 s apart, 774 s of a 1056 s step), so the step
+        // prints its count and time once, from its caller. The ids are in
+        // the firmware's own capture, which the boot log keeps.
     }
     Ok(delivered)
 }

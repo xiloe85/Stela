@@ -857,3 +857,27 @@ produced this log is kept at
 `~/Downloads/stela-backup/BOOTX64-xe-barfix-2026-11-17.efi` (`eba04fb7…dd67`),
 and the NVIDIA-only loader before it at
 `~/Downloads/stela-backup/BOOTX64-nvidia-2026-11-17.efi` (`c521aafc…bfe5`).
+
+### Where the 17 minutes go, and the first cut at it
+
+The log timestamps this step already, so no rebuild was needed to find the
+cost. The newest boot's breakdown:
+
+| segment | time | note |
+|---|---|---|
+| `the firmware ends its boot services` | 83.6 s | ExitBootServices itself took **131 ms** (`FIRMWARE boot services ended at try 1 of 4 in 131 ms`); the rest is the pre-exit work |
+| `the firmware has left; its USB controllers` | 62.2 s | two xHCI controllers handed away from the firmware |
+| `the local APIC` | 10.4 s | x2APIC mode chosen |
+| `stopping the firmware's processors` | **774.3 s** | 15 INIT deliveries, `apic=0x8 … 0x42`, spaced ~48 s apart, every one `destination_ack=unobserved` |
+
+`Apic::init_only` cannot be the 48 s: this processor is x2APIC (so
+`wait_delivery` returns at once, the delivery-status bit having been removed)
+and Intel family 6 (so `settles_at_once` skips the 10 ms INIT wait), leaving a
+`send` of two register writes and no delay. What sat between the deliveries was
+therefore the `NATIVE FIRMWARE INIT delivered apic=…` line each one printed.
+
+`quiesce_firmware_aps` no longer prints per delivery; the step prints its count
+and total once, with `ms=`. If the 774 s collapses on the next boot, the cost
+was the post-ExitBootServices console path and every later test gets ~13
+minutes back. If it does not, the cost is in the INIT itself and the next log
+says so by name. Either way the answer costs one boot.
