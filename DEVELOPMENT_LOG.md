@@ -463,3 +463,27 @@ whole installer stick (`stela create <stick> --ipsw … --installer offline|onli
 - The 14.9 GB Cruzer Blade therefore cannot hold an Offline installer; it was dry
   run as Online: "Would erase sda (Cruzer Blade) and make an Online installer on
   it."
+
+### Session 5 — the installer stick, built and verified
+
+`stela create /dev/sda --installer online --ipsw …` needs the CLI from
+`cargo xtask dist` (the plain `cargo build -p stela-cli` refuses: "this stela was
+built without its boot image"). Dist embeds `stela-dist.efi` — 52,926,976 B with
+`STELA_XE=1` — into a 65,341,648-byte `stela`. The first `create` was killed
+mid-run (2.2 GB written, EFI volume empty); `stela repair /dev/sda --ipsw …`
+finished it: boot files 507.3 MB, firmware 189.1 MiB, settings restored.
+
+`stela status /dev/sda --full` (every byte read back):
+
+```
+model          Mac14,3      Stela 0.4.2      macOS 27.0.1 (26A434)
+Wi-Fi          none: an Online install needs Ethernet
+firmware       complete (189.1 MiB)
+boot files     intact
+install        Online: the install downloads macOS, so the PC needs internet
+No problems found.
+```
+
+So the stick carries an Online installer: the macOS payload is not on it, the
+install fetches it. Wi-Fi is still unset (`stela settings` can add it without
+rebuilding); otherwise the PC needs Ethernet in the installer.
