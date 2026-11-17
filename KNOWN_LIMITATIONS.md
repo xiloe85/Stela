@@ -14,34 +14,43 @@ an Intel GPU under Stela**. Upstream states this in the code comment:
 - Level 5 (a Metal shader through the Intel backend) — **not achieved**.
 - Levels 6–10 — **not achieved**.
 
-## 1a. The Intel boot stops inside Linux's own first tasks, and does so silently
+## 1a. Linux starts and an install completes, but the GPU start's own report is not on the stick
 
-On the physical machine the claim now succeeds (M3), and Stela then starts its
-Linux to run the GPU's driver. Two boots (2026-11-17) stop after seven `LINUX`
-lines, the last of them printed from inside `workingset_init()`:
+Boots 7 and 8 (2026-11-17) stopped after seven `LINUX` lines, the last from
+inside `workingset_init()`, with no panic and no watchdog stop: the two
+completions PID 1 passes had no timeout and ran inside one dispatch step, so the
+loop that reports a stuck step could not speak.
 
-    LINUX <6> workingset: timestamp_bits=62 (anon: 57) max_order=21 bucket_order=0 (anon: 0)
+Boot 9, carrying the image that bounds and names those boundaries, is past them
+and reports no failure at all:
 
-No panic follows, no step-watchdog stop follows, and nothing more is written.
-That is not slowness and not a display fault: it is the shape of the code. The
-built-in initcalls end at `workingset_init()`/`fcntl_init()`, after which PID 1
-passes two completions that had **no timeout**, and those waits run inside one
-dispatch step — and the loop that would report a stuck step can only speak
-between steps.
+    LINUX <6> stela: built-in initcalls: workingset done (0)
+    LINUX <6> stela: built-in initcalls done; resource roots complete
+    LINUX <6> stela: threads: supervisor claimed pid 1
+    LINUX <6> stela: threads: kthreadd claimed pid 2
+    LINUX <6> stela-init: kthreadd entered; starting the workqueues
 
-So this limitation is currently **unlocalised**: we know the boot stops between
-`workingset_init` and the workqueue start, and we cannot yet say which. The
-image built on 2026-11-17 names every one of those boundaries and bounds both
-waits (10 s and 30 s, into a recorded panic), which converts the silence into
-an answer on the next boot. Until that boot happens, nothing here should be
-read as "the probe is close".
+The macOS installer then ran for 1310 s and its checkpoint protocol completed
+(`seal_system_volume`, `create_system_snapshot`, `set_autoboot_delay`, the
+cleanups, `AMRError 0`), writing 26.7 GiB to the internal SSD and asking for a
+restart.
 
-Related, and also observed: **the screen goes black exactly when the claim
-succeeds.** The strongest explanation is that the flicker-free framebuffer Stela
-draws the step list into lives in the Intel GPU's aperture, and the claim's
-Function Level Reset takes the display down with it. It is consistent with every
-boot so far (refused claims kept their text; successful claims went dark) but it
-is a hypothesis, not a measurement.
+What is still unmeasured is the probe. Stela holds the host drivers' lock for
+Linux's whole start and refuses to store the USB's log from inside a driver
+call — the log says so itself (`BOOT LOG not stored: this processor stopped
+inside the host drivers`, t=399.478) — so `GPU START claim_ms=… linux_ms=…
+probe_ms=…` and the GPU step's own completion line are not in the file. Nothing
+here should be read as "xe probed": a failed start would have ended the boot
+with `macOS cannot run without a GPU` and none did, which bounds the start at
+"it returned success", not at "DRM is bound". Storing those lines from inside
+the start is the next change.
+
+Related, and still unexplained: **the screen goes black exactly when the claim
+succeeds.** The strongest explanation remains that the flicker-free framebuffer
+Stela draws the step list into lives in the Intel GPU's aperture, and the claim's
+Function Level Reset takes the display down with it — consistent with every boot
+so far (refused claims kept their text; successful claims went dark, and the
+installer ran with `CURSOR moved_per_wall_second=0.0`), but still a hypothesis.
 
 ## 2. The internal SSD is behind Intel VMD (blocker for installing macOS)
 

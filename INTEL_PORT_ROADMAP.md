@@ -22,7 +22,7 @@ Status vocabulary: **done** / **in progress** / **not started** / **blocked**.
 `GPU_BACKEND_DESIGN.md`: four approaches compared; **xe + ANV + BRW** chosen,
 with the module map, execution flow, memory design and test strategy.
 
-## M3 — Intel GPU initialization  → **in progress (the claim succeeds on the real Arc 140T; the boot now stops inside Linux's first tasks, before the probe)**
+## M3 — Intel GPU initialization  → **in progress (the claim succeeds, Linux starts, and macOS's installer completes an install; the probe's own report is not yet on the stick)**
 
 Done: the Intel-only configuration compiles (`build.rs`'s `kbuild` gate,
 `build/xe.rs`'s import list), an Arrow Lake admission test passes, the xe
@@ -109,6 +109,25 @@ Status of the missing steps:
 
 Acceptance: Stela's boot log shows xe binding `8086:7d51`, GT/GuC
 initialised, a DRM render node present, and KMS presenting a frame.
+
+Session 10 changes that answer completely. Boot 9 passes the boundaries the
+diagnostic image names — `workingset done (0)`, `built-in initcalls done`,
+supervisor pid 1, kthreadd pid 2, `kthreadd entered; starting the workqueues` —
+with no panic and no watchdog stop, so the stall was the code's shape and not a
+missing bound. The engine then ran `Starting the macOS installer` for 1310 s,
+and the installer's checkpoint protocol completed: system volume sealed, system
+snapshot created, autoboot delay set, filesystems unmounted and every cleanup
+checkpoint true, `AMRError 0`, `DEVELOPMENT INSTALL protocol complete`. 26.7 GiB
+went to `nvme0n1p4` (`Stela macOS`, 87,787,831,296 bytes) on the internal WD
+SSD, and the installer asked for a restart, which Stela performed
+(`STELA RESTART code=0x15`).
+
+The probe is the remaining unknown, and it is a logging gap rather than a
+result: Stela refuses to store the USB's log from inside a driver call while it
+holds the host drivers' lock for Linux's start, so `GPU START claim_ms=…
+linux_ms=… probe_ms=…` never reaches the stick. A failed start would have ended
+the boot with `macOS cannot run without a GPU`, and none did, but that is an
+inference; the next image should store those lines from inside the start.
 
 ## M4 — Shader execution  → **not started**
 

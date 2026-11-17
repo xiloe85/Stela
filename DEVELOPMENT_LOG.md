@@ -1033,3 +1033,94 @@ jobs that used to need elevation now do not:
 The boot log is `EFI/stela/boot.log` on that same partition, so reading it needs
 no raw device access either. Passwordless privilege is therefore not needed for
 this port's test cycle at all.
+
+## Session 10 — the boot reaches the installer, and the install completes (2026-11-17)
+
+Image `99f8e254…` on the stick, firmware boot counter 9, `HOST version=0.4.2`,
+Core Ultra 7 255H. This is the boot that answers session 9's open question, and
+it answers it by going much further than "the stall is named".
+
+**The stall is gone.** Boots 7 and 8 ended inside `workingset_init()`; boot 9
+prints straight through the boundaries the diagnostic image names:
+
+    [ 399.521] LINUX <6> workingset: timestamp_bits=62 (anon: 57) max_order=21 bucket_order=0 (anon: 0)
+    [ 399.521] LINUX <6> stela: built-in initcalls: workingset done (0)
+    [ 399.521] LINUX <6> stela: built-in initcalls done; resource roots complete
+    [ 399.522] LINUX <6> stela: threads: supervisor claimed pid 1
+    [ 399.522] LINUX <6> stela: threads: kthreadd claimed pid 2
+    [ 399.522] LINUX <6> stela-init: published; waiting for kthreadd
+    [ 399.522] LINUX <6> stela-init: kthreadd published; waiting for it to enter
+    [ 399.522] LINUX <6> stela-kthreadd: running, waiting for its publication
+    [ 399.522] LINUX <6> stela-kthreadd: entering its loop
+    [ 399.522] LINUX <6> stela-init: kthreadd entered; starting the workqueues
+
+No panic and no step-watchdog stop fired, so the stall was never a missing
+timeout: the two completions PID 1 passes were reached and passed. The bound the
+image added (10 s, 30 s) did not have to fire.
+
+**The guest then ran macOS for 22 minutes.** The engine's run label is
+`Starting the macOS installer` (`engine.rs`, set from `restore`), and at the end
+of the run Stela reported
+
+    [2451.973] STEP o Starting the macOS installer (1310 s) ms=1310396
+
+so the macOS restore/install environment executed from t=1141 to the stop. Its
+own numbers: `GUEST PERFORMANCE retired=1.56e12`, about 0.9–1.0 billion guest
+instructions per second, `STATISTICS blocks: 14101651663` with 99% chained.
+
+**The install completed.** `restore.rs` prints its ledger as the installer's
+checkpoint protocol advances, and every checkpoint the log shows succeeded:
+
+    seal_system_volume            COMPLETE=true
+    create_system_snapshot        COMPLETE=true
+    set_autoboot_delay            COMPLETE=true
+    unmount_filesystems           COMPLETE=true
+    cleanup_boot_command          COMPLETE=true
+    cleanup_recovery_os_volume    COMPLETE=true
+    cleanup_check_result          COMPLETE=true
+    cleanup_run_leaks             COMPLETE=true
+    cleanup_send_crash_logs       COMPLETE=true
+    cleanup_send_final_status     COMPLETE=true
+    AMRError                      0
+
+then, from `restore.rs:1072`, the terminal line of `Mode::DevelopmentInstall`:
+
+    DEVELOPMENT INSTALL protocol complete; TSS enabled, FDR offline/unprovisioned; installed boot remains unqualified
+
+The target partition is the internal WD PC SN5000S, `nvme0n1p4`, 87,787,831,296
+bytes, partition label `Stela macOS`; Stela's own disk counters for that boot
+(`HOST DISK IO serial=25491H809160`) read 28,019,160 KiB written and 48,142,122
+KiB read. The installer then asked the machine to restart — `STOP reset:
+Restart: smc: MBSE restart command` — and Stela reported
+
+    [2452.026] POWER the firmware starts its entry Boot0005 again after the restart
+    [2452.026] STELA RESTART code=0x15
+
+**What it looked like: nothing.** `CURSOR moved_per_wall_second=0.0`, and the
+guest console Stela captures is blank (`GUEST|` rows are VGA attribute bytes,
+0x07, with no text). The install ran headless, which is consistent with the
+hypothesis at the end of session 9: the claim's Function Level Reset takes the
+firmware framebuffer down and nothing re-initializes it.
+
+**What this boot still does not say: whether xe probed.** Stela holds the host
+drivers' lock for Linux's whole start and refuses to store the USB's log from
+inside a driver call — the boot log says so in as many words, at t=399.478:
+
+    BOOT LOG not stored: this processor stopped inside the host drivers
+
+Everything printed between that line and the engine's run is on the screen only,
+so `GPU START claim_ms=… linux_ms=… probe_ms=…` and `STEP o Starting the GPU`
+are not in the file. What can be inferred is bounded: the GPU start must have
+returned success, because a refused or failed start ends the boot with
+`macOS cannot run without a GPU` (`start.rs:157`, as boot 6 shows), and the
+engine ran for 1310 s, which puts the start's own duration at about 742 s
+(399 → 1141). That inference is not a measurement of the probe, of the GuC/HuC/
+GSC firmware load, or of a bound DRM device, and it should not be recorded as
+one. The fix is cheap and is the next change: store the USB's log from the GPU
+start's own report lines, the way the `pr_info` hook already does.
+
+**Next boot decides the rest.** The install is sealed and the machine was asked
+to restart into it; Boot0005 is Stela again, so the next boot should build a boot
+bundle from the installed system (`boot_policy`, `bundle::from_disk`) instead of
+serving the restore. What that boot reports — a first-boot macOS, a new `STELA
+FATAL`, or a stop — is the next measurement.
