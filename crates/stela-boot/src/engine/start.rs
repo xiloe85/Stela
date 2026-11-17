@@ -1576,26 +1576,38 @@ fn open_gpus(
     // functions, starting Linux, and nouveau's probe, which boots the GSP
     // and binds DRM.
     let (linux, probe) = gpu::start_times();
-    output::arguments(format_args!(
-        "GPU START claim_ms={} linux_ms={} probe_ms={} total_ms={}\n",
-        ms(opening.wrapping_sub(claiming)),
-        ms(linux),
-        ms(probe),
-        ms(host::rdtsc().wrapping_sub(claiming)),
-    ));
-    let ok = match opened {
-        Ok(()) => {
-            crate::status::done("started");
-            true
-        }
-        Err(error) => {
-            crate::status::warn(&stela_boot_core::gpu_status::failed(
-                &found,
-                &format!("{error}"),
-            ));
-            false
-        }
-    };
+    // The report and the step's ending are printed while the host drivers'
+    // lock is still held here, and that lock refuses every ordinary log store
+    // (`output::flush_where`), so on 2026-11-17 they reached the screen and
+    // not the stick: the boot log named the claim and then said nothing about
+    // whether the start returned, which is the one thing this line answers.
+    // The start's own scope is the place inside that lock that may drive the
+    // log partition (`storage::in_gpu_start`), so the lines are printed and
+    // stored there.
+    let ok = storage::in_gpu_start(|| {
+        output::arguments(format_args!(
+            "GPU START claim_ms={} linux_ms={} probe_ms={} total_ms={}\n",
+            ms(opening.wrapping_sub(claiming)),
+            ms(linux),
+            ms(probe),
+            ms(host::rdtsc().wrapping_sub(claiming)),
+        ));
+        let ok = match opened {
+            Ok(()) => {
+                crate::status::done("started");
+                true
+            }
+            Err(error) => {
+                crate::status::warn(&stela_boot_core::gpu_status::failed(
+                    &found,
+                    &format!("{error}"),
+                ));
+                false
+            }
+        };
+        output::store_usb_log();
+        ok
+    });
     output::flush_log();
     ok
 }

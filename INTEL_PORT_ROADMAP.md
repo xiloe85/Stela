@@ -127,7 +127,11 @@ result: Stela refuses to store the USB's log from inside a driver call while it
 holds the host drivers' lock for Linux's start, so `GPU START claim_ms=…
 linux_ms=… probe_ms=…` never reaches the stick. A failed start would have ended
 the boot with `macOS cannot run without a GPU`, and none did, but that is an
-inference; the next image should store those lines from inside the start.
+inference; and that inference is now known to be wrong — a failed start does
+not stop the boot (`open_gpus` false only skips `gpu::serve`), so that boot is
+equally consistent with a GPU that never came up. The image built after the
+audit prints the start's report inside the start's own scope and stores it
+there.
 
 ## M4 — Shader execution  → **not started**
 

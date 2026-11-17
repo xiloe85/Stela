@@ -1110,17 +1110,165 @@ inside a driver call — the boot log says so in as many words, at t=399.478:
 
 Everything printed between that line and the engine's run is on the screen only,
 so `GPU START claim_ms=… linux_ms=… probe_ms=…` and `STEP o Starting the GPU`
-are not in the file. What can be inferred is bounded: the GPU start must have
-returned success, because a refused or failed start ends the boot with
-`macOS cannot run without a GPU` (`start.rs:157`, as boot 6 shows), and the
-engine ran for 1310 s, which puts the start's own duration at about 742 s
-(399 → 1141). That inference is not a measurement of the probe, of the GuC/HuC/
-GSC firmware load, or of a bound DRM device, and it should not be recorded as
-one. The fix is cheap and is the next change: store the USB's log from the GPU
-start's own report lines, the way the `pr_info` hook already does.
+are not in the file. All that the timing says is that the engine ran for
+1310 s (t=1141 to the stop), which bounds the start plus everything the engine
+does before it runs the guest at about 742 s. It does **not** say the start
+succeeded: see "Session 10, continued" below, which corrects the first reading
+of this boot — `open_gpus` returning false only skips `gpu::serve`, and the
+`macOS cannot run without a GPU` line is a pre-start judgement of the
+configured stack, so a 22-minute headless install is exactly what a failed
+start looks like. The change this audit made is the one that answers it: the
+start's report and step ending are now printed inside the start's own scope and
+stored from there.
 
 **Next boot decides the rest.** The install is sealed and the machine was asked
 to restart into it; Boot0005 is Stela again, so the next boot should build a boot
 bundle from the installed system (`boot_policy`, `bundle::from_disk`) instead of
 serving the restore. What that boot reports — a first-boot macOS, a new `STELA
 FATAL`, or a stop — is the next measurement.
+
+## Session 10, continued — boot 9's log audited line by line (2026-11-17/18)
+
+The ring on the stick holds boots 5 to 9. Boot 9 is the one that installed
+macOS; the four before it are the earlier attempts (boot 5 stopped placing the
+board's devices, boot 6 refused the register BAR, boots 7 and 8 stopped inside
+`workingset_init()`). Everything below is boot 9 unless said otherwise.
+
+### Where the 41 minutes went
+
+    0 –   27 s  loader, `stela.cfg`, GPU found, translation cache (211 MB, 8 s)
+   27 –  360 s  Taking control of the other processors          330.9 s
+  360 –  399 s  system engine, host processor state, ACPI, devices, disks/USB
+  399.2– 399.5 s  GPU claim                                          234 ms
+  399.5– 1141 s  the GPU's start, of which Linux printed 12 lines and stopped 742 s
+ 1141 – 2452 s  the macOS restore environment                   1310 s
+
+The 331 s step breaks down as its own detail lines say:
+
+    83.7 s  from "the firmware ends its boot services" to the next part
+            (the exit itself was "try 1 of 4 in 132 ms" at t=84.0, so ~57 s
+            pass before the exit is even called, and ~33 s after it)
+    62.3 s  `usb_legacy.take`: two xHCI controllers, each reported
+            "not owned by the firmware" — i.e. no wait was needed, so ~30 s
+            per controller is spent inside the capability's own MMIO access,
+            which is firmware/SMM territory (issue 36), not a Stela timeout
+    10.4 s  choosing x2APIC and reading the firmware's DMAR
+    49.5 s  quiescing 15 firmware processors (INIT deliveries, no ack)
+
+This audit adds three `status::progress` calls inside the 83.7 s part (the
+map buffer, the exit's call, the fault reporter) so the next boot names which
+of them owns the ~90 s; that step prints only on the screen otherwise.
+
+### The GPU's start: no display, and probably no success
+
+Four lines that a successful start would have printed are absent:
+
+    GPU START claim_ms=… linux_ms=… probe_ms=… total_ms=…
+    [ok] Starting the GPU
+    GPU <name>: display runs <w> x <h> at … mHz
+    DISPLAY no GPU display yet: looking for one in 1920x1200 once a second
+
+`gpu::serve` runs only when `open_gpus` returned true (`start.rs`), and every
+one of its paths prints. Their absence is consistent with a start that failed
+after the claim — but it is not proof, because the same host drivers' lock that
+swallowed the step lines would have swallowed these too. What is certain is
+that nothing was presented all boot: `CURSOR moved_per_wall_second=0.0` in
+every report, and `samples=0`.
+
+The dead screen is not a separate mystery: `display.rs` states that binding a
+GPU ends the firmware's framebuffer on it, and that the console then moves to
+the output's front buffer through the driver's KMS. With no display taken
+there is no front buffer to move to, so the panel stays dark *and* the console
+Stela prints to is gone. That is why a 22-minute install ran with nothing on
+screen and why the guest never drew a frame.
+
+**Correction to this session's earlier note, and to the roadmap and
+`KNOWN_LIMITATIONS`:** a failed GPU start does *not* end the boot. The stop
+message `macOS cannot run without a GPU` comes from `gpu::no_metal_device()`
+(`start.rs:157`), which runs *before* the start and judges the configured
+stack, not the live device; `open_gpus` returning false only skips
+`gpu::serve` and the boot carries on. Boot 6 shows the pre-check firing for a
+refused claim, not the start failing. So boot 9's headless install is exactly
+what a failed start looks like, and the pre-check cannot catch it.
+
+### What the guest said while it installed
+
+Stela captures the emulated console, and the ring holds its last 113 s
+(t=2334.8–2448.2). It is the install's own record and it agrees with the
+ledger:
+
+    [15:35:35.0710-GMT]{1>5} CHECKPOINT FINAL-MONITOR:(SUCCESS)  ... reboot
+    restore-step-user-progress = 100
+    CHECKPOINT END: RESTORED:[0x068B] seal_system_volume
+    CHECKPOINT END: RESTORED:[0x0669] create_system_snapshot
+    CHECKPOINT END: RESTORED:[0x0640] set_autoboot_delay
+    CHECKPOINT END: RESTORED:[0x0642] unmount_filesystems
+    CHECKPOINT BEGIN/END: [0x0651] cleanup_failure_warning
+    apfs_log_op_with_proc: disk1s1 mount-complete volume Macintosh HD
+
+Failures worth fixing, in the guest's words:
+
+- `Couldn't retrieve SMC Key AC-R. Got SMC error: -3` followed by
+  `unable to kick port micro - Couldn't set AC-R to 0`. Stela's SMC model has
+  no `AC-R` key. A key to add.
+- `virtual IOReturn IONVMeController::SendShutdownNotification(bool)::2161:
+  CC=0x464001 timeout=25000`. The guest asked the controller to announce its
+  shutdown and the model did not answer in the guest's 25 s. Every restart
+  therefore ends with an NVMe controller that the guest believes is stuck;
+  the install still sealed, but this is the one place where a real data
+  flush could be skipped.
+- `libpartition: unexpected partition 'iSCPreboot' - skipping`: a stale
+  `iSCPreboot` left by an earlier attempt. The installer skips it, so the
+  layout now carries a partition nothing uses.
+- `getVolumeGroupMountFrom:9463: … failed with error 2` (twice),
+  `nx_volume_group_update:706: … Volume Update role 0xc0 is not a System or
+  Data volume`, `Tried to unmount a volume at '/mnt5' that wasn't mounted`,
+  `sock 9: shutdown(SHUT_RDWR) failed: Socket is not connected`,
+  `pre-reboot: non-boot task posix_spawn() failed: 2`, and launchd's
+  `failed lookup` for `logd`, `coreservicesd`, `cfprefsd` and
+  `notification_center` — all benign on a restore ramdisk.
+- `mDNS [ ]: no usable interfaces found` (seven times): the guest has no
+  network interface at all, which is the Wi-Fi failure below seen from inside.
+
+### Host devices that did not start
+
+Each is a missing feature rather than a crash, and each is named by Stela:
+
+    HOST DEVICE FAILED pci=0000:00:14.3 (Wi-Fi)  bus mastering stays off until
+        the device is taken over after Stela wrote the register 0x82
+    HOST DEVICE FAILED pci=0000:00:0d.2 (USB4)   USB4 host: NHI cold ownership:
+        ResetRequired
+    PLATFORM FAILED \_SB_.PC00.I2C1.ETPD         native mapping: OutsideResource
+    PLATFORM FAILED PNP0CA0                      UCSI: HardwareInactive
+    USB UNUSED port 2 interface 0 (01/01/00)     unsupported or malformed UAC2
+                                                 function descriptors
+    USB UNUSED port 9 interfaces 0-4 (0e/…)      no class driver for this
+                                                 interface (a camera)
+    HOST IOMMU VT-d unit 0xfc800000/0xfc801000   UnsupportedStructure(5)
+    HOST IOMMU every unit left untranslated and off
+
+So: no Wi-Fi, no USB4, no trackpad, no USB-C connector management, no camera,
+no USB audio, and DMA that the IOMMU does not confine. Seven IOAPIC GSIs are
+left to the firmware as SMI pins, and `no IOMMU: device DMA unrestricted`
+appears once the units are dropped.
+
+### Log plumbing: two faults, both fixed tonight
+
+1. **Step lines were printed where the store is refused.** `status::begin`,
+   `done`, `warn` and `fail` all call `output::flush_log()`, and inside the
+   host drivers' lock that call refuses and says so once
+   (`BOOT LOG not stored: this processor stopped inside the host drivers`,
+   t=399.478). The GPU start holds that lock for its whole length, so its
+   step lines and its report reached the screen and never the stick. `status`
+   now asks for the start's own store first (`status::store_logs`), and the
+   start's report is printed inside the start's scope with a store behind it.
+2. **The console floods the ring.** The last 60 s of boot 9 produced 2.2 MB of
+   `GUEST-FRAGMENT`/`GUEST|` rows — mostly blank cells as `\x07` attribute
+   bytes — in a 4 MiB ring. A long boot can therefore lose its own beginning.
+   Not changed tonight; the capture should drop blank cells and repeat rows.
+
+Also noted, minor: `HEAP … cores=-43400M/…` prints a negative share for one
+core. The figure is a per-core allocation-versus-free counter, so a block
+allocated on one core and freed on another drives it negative; the size is
+larger than the whole heap, which suggests a wrap rather than a real number.
+Diagnostics only.

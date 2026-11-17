@@ -42,25 +42,36 @@ inside the host drivers`, t=399.478) — so `GPU START claim_ms=… linux_ms=…
 probe_ms=…` and the GPU step's own completion line are not in the file. Nothing
 here should be read as "xe probed": a failed start would have ended the boot
 with `macOS cannot run without a GPU` and none did, which bounds the start at
-"it returned success", not at "DRM is bound". Storing those lines from inside
-the start is the next change.
+"it returned success", not at "DRM is bound" — and that reading is now known to
+be wrong as well: a failed start does not stop the boot at all, since
+`open_gpus` returning false only skips `gpu::serve`. What is certain is that
+nothing was ever presented (`CURSOR moved_per_wall_second=0.0`, `samples=0`).
+The start's own report is now printed inside the start's scope and stored from
+there, which is what the next boot reads.
+**The screen goes black exactly when the claim succeeds, and boot 9 shows the
+mechanism.** `display.rs` starts from this premise: binding a GPU ends the
+firmware's framebuffer on that function, so Stela's console moves to the
+output's *front buffer* through the driver's KMS, where the modeled DCP's frames
+follow it, and "a GPU driving no display leaves the firmware's scanout alone".
+The claim reset the function (FLR) and no display was ever taken — the whole
+boot reported `CURSOR moved_per_wall_second=0.0` with `samples=0` — so there was
+no front buffer to move to and the panel stayed dark through 22 minutes of
+install. The fix is not a framebuffer copy: the display has to be *taken* (a
+KMS display bound on the Intel display engine, as `display.rs` expects) or the
+firmware's scanout has to be re-programmed after the reset. Segments found and
+what each would need are in `DEVELOPMENT_LOG.md`, session 10 continued.
 
-Related, and still unexplained: **the screen goes black exactly when the claim
-succeeds.** The strongest explanation remains that the flicker-free framebuffer
-Stela draws the step list into lives in the Intel GPU's aperture, and the claim's
-Function Level Reset takes the display down with it — consistent with every boot
-so far (refused claims kept their text; successful claims went dark, and the
-installer ran with `CURSOR moved_per_wall_second=0.0`), but still a hypothesis.
+## 2. Intel VMD must stay off in the firmware (it is, and the SSD works)
 
-## 2. The internal SSD is behind Intel VMD (blocker for installing macOS)
-
-Verified on the machine: `8086:7d0b` RST VMD is active, the NVMe controller
-(`15b7:5036`, WD PC SN5000S) appears at `10000:e1:00.0` inside the VMD
-domain. Stela supports NVMe directly, not VMD. As configured, Stela will not
-see this machine's internal disk. Mitigations, in order: use an external
-USB/NVMe disk (recommended, zero risk); or change the firmware storage mode
-to AHCI (affects the installed Linux system — requires the user's explicit
-consent); or implement VMD in Stela (substantial new work).
+This used to read as a blocker: `8086:7d0b` RST VMD active puts the NVMe
+controller (`15b7:5036`, WD PC SN5000S) at `10000:e1:00.0` inside the VMD
+domain, and Stela supports NVMe directly, not VMD. VMD is now disabled in the
+firmware, and boot 9 proves the disk is Stela's: the controller starts as
+`0000:01:00.0 id=15b7:5036`, its partition `9C6963CC-C904-4BDA-BFA7-A67446C5466D`
+(171,460,608 blocks) is found as `(installed system)`, and 28,019,160 KiB were
+written to it during the install. If VMD is ever switched back on, this becomes
+a blocker again, and the mitigations are an external USB/NVMe disk, AHCI mode
+(which would affect the installed Linux), or implementing VMD (substantial).
 
 ## 3. 16 GB of shared memory
 

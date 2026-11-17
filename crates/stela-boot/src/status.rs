@@ -332,6 +332,16 @@ pub fn set_clock(tsc_hz: u64) {
     output::set_clock(tsc_hz);
 }
 
+/// Store the boot logs at a step's boundary. While the GPU's start runs, this
+/// processor holds the host drivers' lock, which refuses the ordinary store
+/// below (`output::flush_log`) and said so once on 2026-11-17 — the step lines
+/// of that start then reached the screen and not the stick. The start's own
+/// store is what that lock allows, so it is asked for first.
+fn store_logs() {
+    let _ = crate::engine::store_usb_log_in_gpu_start();
+    output::flush_log();
+}
+
 /// Start a step; one still running ends first, as done.
 pub fn begin(title: &str) {
     with(|state| {
@@ -356,7 +366,7 @@ pub fn begin(title: &str) {
         });
         state.draw_running();
     });
-    output::flush_log();
+    store_logs();
 }
 
 /// Show how far the running step has come, such as `182 of 484 MB`.
@@ -453,20 +463,20 @@ pub fn countdown(action: &str, seconds: u64) {
 /// End the running step with `result`, which may be empty.
 pub fn done(result: &str) {
     with(|state| state.finish(Mark::Ok, result));
-    output::flush_log();
+    store_logs();
 }
 
 /// End the running step as having gone wrong in a way that lets the boot
 /// go on.
 pub fn warn(result: &str) {
     with(|state| state.finish(Mark::Warn, result));
-    output::flush_log();
+    store_logs();
 }
 
 /// End the running step as failed, or show `result` as a failure.
 pub fn fail(result: &str) {
     with(|state| state.finish(Mark::Failed, result));
-    output::flush_log();
+    store_logs();
 }
 
 /// A line of its own, under the step lines.

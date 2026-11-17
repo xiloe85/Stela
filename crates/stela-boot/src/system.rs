@@ -882,7 +882,13 @@ fn load(
     // The last allocation Stela makes before the exit: from here to the
     // exit's own map read only the firmware's timer and logs close.
     let final_map = crate::boot_exit::Buffer::allocate();
+    // The exit's map buffer, the firmware's own ends of it and the engine's
+    // fault reporting each cost time of their own: on 2026-11-17 this step
+    // took 83.7 s with the exit itself timed at 132 ms, so the parts are named
+    // separately here rather than as one detail.
+    crate::status::progress("the firmware's last boot services");
     crate::output::leave_boot_services();
+    crate::status::progress("the firmware's boot services end");
     // SAFETY: no protocol or pool allocation outlives this call; every page
     // Stela keeps is LOADER_DATA or LOADER_CODE.
     let map = unsafe { crate::boot_exit::exit(final_map) };
@@ -899,6 +905,7 @@ fn load(
         asm!("cli", options(nomem, nostack));
         crate::paging::report_faults();
     }
+    crate::status::progress("the engine's fault reporting");
     // The log is closed from here to the engine's start, so a freeze in
     // this step shows only on the screen: each part names itself there.
     // Before anything stops a controller: firmware that still drives USB
