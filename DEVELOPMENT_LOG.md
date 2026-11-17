@@ -732,3 +732,40 @@ Meteor Lake descriptor, the xe probe itself (BAR, DMA mask, IRQ domain, PPGTT,
 memory region), and the display path. Until the probe binds a DRM node, ANV has
 nothing to open and `GpuStack::INTEL.vulkan` stays `None` — deliberately, since
 no silent software fallback is allowed.
+
+### The xe image is on the stick
+
+Chasing the firmware step found it already done upstream: `gpu/before.rs`'s
+`XE` part calls `recipes::require_xe`, and `recipes.rs`'s
+`"Meteor Lake or Arrow Lake"` entry holds `0x7d51` with
+`i915/mtl_guc_70.bin`, `i915/mtl_huc_gsc.bin`, `i915/mtl_gsc_1.bin` and
+`i915/mtl_dmc.bin`, each pinned by digest, with a test already asserting it.
+Only the blobs on the stick are missing. So the step that remains is the probe,
+and the next fact has to come from the hardware.
+
+The image was therefore built with Intel's driver in it:
+
+    STELA_XE=1 cargo xtask boot build --release
+    Finished `release` profile [optimized + debuginfo] target(s) in 3m 59s
+
+| artifact | bytes | note |
+|---|---|---|
+| `stela.efi` | 204,379,648 | symbols kept, sha256 `08174ac6…f9c5` |
+| `stela-deploy.efi` | 52,928,000 | stripped, what the stick boots |
+
+Both carry `mtl_guc_70`, `mtl_huc_gsc`, `mtl_gsc_1`, `mtl_dmc`, and the new
+`GPU START phase=` lines. The stick's `EFI/BOOT/BOOTX64.EFI` was replaced with
+the deploy image (`eba04fb7…dd67`, matching the build byte for byte); the
+NVIDIA-only loader that was there is kept at
+`~/Downloads/stela-backup/BOOTX64-nvidia-2026-11-17.efi` (`c521aafc…bfe5`) to
+put back without a rebuild.
+
+What the next boot should show, if the pieces are as read: `Starting macOS`,
+then `Starting the GPU`, then `GPU START phase=claim` and — because the stick's
+firmware bundle predates the Intel stack and holds none of the four blobs —
+`GPU …: the USB's firmware bundle lacks 4 of this chip's 4 files (…); `stela
+repair` completes it`, refused, and the boot naming why no GPU started. That
+refusal would be the first proof on this machine that Stela's Intel stack
+selects, identifies and asks for the right firmware; it is not acceleration,
+and it is not a working boot. **`stela repair` must not be run on this stick**:
+it would rewrite the startup choices and bring the network medium back.

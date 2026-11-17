@@ -49,10 +49,14 @@ Status of the missing steps:
    xe therefore reports **METEORLAKE** for this GPU: 46-bit DMA mask,
    `is_dgfx` false, force-probe. Asserted by tests in `stack.rs` and `xe.rs`;
    `xtask/src/gpu/anv.rs` already listed `7d51`, so ANV's host lane covers it.
-3. Wire GuC/HuC/GSC/DMC firmware selection for the Meteor Lake descriptor into
-   the claim path (recipes exist; the caller exists for nouveau only). The
-   names to select are the ones the descriptor's own feature macros request —
-   nothing for Arrow Lake H is bundle-resident yet.
+3. **done (already upstream)** — `gpu/before.rs`'s `XE` part calls
+   `stela_loader::host_firmware::recipes::require_xe`, and that table's
+   `"Meteor Lake or Arrow Lake"` entry holds `0x7d51` and asks for
+   `i915/mtl_guc_70.bin`, `i915/mtl_huc_gsc.bin`, `i915/mtl_gsc_1.bin` and
+   `i915/mtl_dmc.bin`, all pinned by digest from linux-firmware
+   `a2dcb924…`. `recipes.rs` already tests `xe_files(0x7d51)`. What is still
+   missing is the four blobs **on the stick's bundle** — the boot will now say
+   so by name instead of failing generically.
 4. Bring up xe probe inside Stela's Linux environment: BAR0 mapping, DMA
    mask 46 bits (not 39 — the descriptor's `dma_mask_size`), interrupts/IRQ
    domain, PPGTT, memory region.
@@ -61,6 +65,13 @@ Status of the missing steps:
 6. **done** — the step names its phase before entering it (`GPU START
    phase=claim|linux|probe`, flushed to the USB log), so a start that never
    returns names where it stopped instead of hanging silently.
+7. **artifact built and on the stick** — `STELA_XE=1 cargo xtask boot build
+   --release` produces `stela.efi` (204,379,648 bytes, sha256 `08174ac6…`) and
+   `stela-deploy.efi` (52,928,000 bytes). Both carry the four Meteor Lake
+   firmware names and the phase lines. The stick's `EFI/BOOT/BOOTX64.EFI` is
+   now the xe deploy image (`eba04fb7…`); the NVIDIA-only loader it replaced
+   is kept at `~/Downloads/stela-backup/BOOTX64-nvidia-2026-11-17.efi`
+   (`c521aafc…`). Not yet booted.
 
 Acceptance: Stela's boot log shows xe binding `8086:7d51`, GT/GuC
 initialised, a DRM render node present, and KMS presenting a frame.
