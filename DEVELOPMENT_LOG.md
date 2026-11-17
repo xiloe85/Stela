@@ -487,3 +487,44 @@ No problems found.
 So the stick carries an Online installer: the macOS payload is not on it, the
 install fetches it. Wi-Fi is still unset (`stela settings` can add it without
 rebuilding); otherwise the PC needs Ethernet in the installer.
+
+### Session 5 — making room on the internal NVMe, without buying anything
+
+The install target problem: no external disk. Stela's picker can install into
+**free space** (`installer.rs`: "macOS can take free space or a Stela partition
+already there… Filesystems are never resized: another system's space is freed
+only by deleting its partition"), so the internal 512 GB WD PC SN5000S can host
+macOS beside Omarchy if 120 GB is left unallocated. Minimum is 60 GB
+(`DEFAULT_MIN_APPLE_BYTES == 60 * GB`).
+
+Machine: `nvme0n1` 1,000,215,216 sectors; p1 ESP 2 GiB (unchanged); p2 LUKS2
+996,016,128 sectors (509,960,257,536 B) holding btrfs `root` (474.92 GiB, 235.66
+GiB used, device mapper 509,943,480,320 B = p2 − 32,768 sectors of LUKS2 header).
+
+Safety net first, in `~/Downloads/shrink-safety/`: `luks-header-nvme0n1p2.img`
+(16 MiB), `gpt-nvme0n1.sf` (text dump), `gpt-head-34s.bin`, `gpt-tail-33s.bin`,
+a copy of `/boot`, and `check_gpt.py`, which validates both GPT copies by
+recomputing the header and entry-array CRC32s and comparing them. `btrfs scrub`
+before touching anything: 228.73 GiB at 2.29 GiB/s, **no errors found**; device
+stats all zero.
+
+The shrink, in three steps:
+
+1. `btrfs filesystem resize 389944442880 /` — online, exit 0, 474.92 GiB →
+   363.16 GiB, 123.5 GB left free inside the filesystem.
+2. LUKS: **not resized live.** `cryptsetup resize --size …` demands the
+   passphrase in 2.8.8 even with `-q --batch-mode` (debug: "Checking volume
+   passphrase … STDIN descriptor passphrase entry requested"), because shrinking
+   re-activates the mapping. Unnecessary anyway: the mapping size is derived
+   from the partition (`size = p2 − 32,768`), so trimming p2 makes the next
+   activation land on exactly the filesystem's size. Verified by arithmetic:
+   761,643,008 − 32,768 = 761,610,240 sectors = 389,944,442,880 B.
+3. `sfdisk --no-reread --force` with p2 resized to 761,643,008 sectors (start
+   unchanged at 4,196,352, PARTUUID unchanged). Kernel initially kept the old
+   table ("Device or resource busy"), both on-disk copies verified by CRC and
+   agreeing; the free gap is 234,375,823 sectors = 120.0004 GB, starting on a
+   2048-sector boundary. macOS takes 120 GB, Linux keeps 363 GiB with ~123 GB
+   free.
+
+Not verified yet: that the reboot lands on a 761,610,240-sector mapping and the
+system mounts; that is the next check, before the installer stick is booted.
