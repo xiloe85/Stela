@@ -441,3 +441,25 @@ to it. Nothing on the host side was changed for this.
 Note on exit codes: the run ended with `STOP idle` and `STELA STOPPED code=0x10`
 but xtask returned 124 (its wait expired) because the guestless/debug image does
 not drive the host exit port under `--kvm`; the serial result is unambiguous.
+
+## Session 5 — the installer artifact (what Stela actually consumes)
+
+Not an `InstallAssistant.pkg`: the host CLI takes an **IPSW** and builds the boot
+bundle from it (`stela prepare --ipsw … --model Mac14,3 --output …`), or writes a
+whole installer stick (`stela create <stick> --ipsw … --installer offline|online`).
+
+- The emulated identity is **Mac14,3** (M2 Pro Mac mini); the tree references
+  kernel build **26A434** 520 times and 26B123 66 times, so the matching image is
+  **macOS 27.0.1, build 26A434**.
+- Source: Apple's own CDN,
+  `updates.cdn-apple.com/2026FallFCS/…/UniversalMac_27.0.1_26A434_Restore.ipsw`,
+  26,637,307,067 bytes, `signed=true`.
+- Downloaded and checked against Apple's published digest:
+  `2f016638293c3e641b8b25391a76fbc16563b3711915a5551cf8aa0f5598a5c1` — matches.
+- Installer modes (`crates/stela-cli/src/setup.rs`): **Offline** copies the whole
+  IPSW onto the stick and needs ≥32 GB (`FULL_MIN`); **Online** keeps the strip
+  small and downloads macOS from Apple during the install, so the installer needs
+  a network — `--wifi SSID` (passphrase from a file) or Ethernet.
+- The 14.9 GB Cruzer Blade therefore cannot hold an Offline installer; it was dry
+  run as Online: "Would erase sda (Cruzer Blade) and make an Online installer on
+  it."
