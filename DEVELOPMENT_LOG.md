@@ -531,3 +531,98 @@ Verified after the reboot: `nvme0n1p2` 389,961,220,096 B, `/dev/mapper/root`
 partition as predicted), `/` 364 G with 116 G available, both GPT copies still
 CRC-clean and agreeing, and the system boots normally. The LUKS resize step was
 not needed; the derived size is what made that safe.
+
+## Session 6: an install with no network — the macOS payload on the internal disk
+
+### What stopped the install
+
+VMD was the disk; the network is the next wall. With VMD disabled in firmware,
+`Preparing the chosen disk for macOS` passed and Stela created the Apple
+partition (`p3`, 120.000 GB) — so the disk path works. The install then stopped
+one step later:
+
+    Network adapter not started: 0000:80:19.6 8086:7740 Wi-Fi: PCI configuration:
+    bus mastering stops until the device is taken
+    [warn] Stela will not start the network: no supported network adapter is visible
+
+This laptop has no Ethernet port and its radio is Intel `8086:7740`, which
+Stela's network stack does not drive. More importantly the radio is the wrong
+kind for the target: **macOS has no Intel Wi-Fi driver** — real Macs and
+hackintoshes use Broadcom — so no amount of Stela-side work would let Wi-Fi
+carry a macOS install. Ethernet or a local payload are the only routes, and
+this machine has no Ethernet.
+
+### The route taken: the IPSW on the internal NVMe
+
+The engine does not care where the install medium lives. `--install-source` is a
+partition GUID: `bundle::with_inventory` reads `payload.json` through the
+firmware's FAT driver on that partition's volume, and `engine::install::open`
+reads the pieces through Stela's own FAT32 reader on the same partition. So the
+26.6 GB image already downloaded and verified on this machine can serve as the
+medium — no purchase, no dongle.
+
+The signing side turned out to be free too: the stick already carries Apple's
+staged answers (`stela/boot/26A434/restore-…/tss-answers.plist`, 24,935 bytes),
+written when it was created with internet. With the medium local,
+`tss::staged::Use::of(Some(set), update=false, remote=false)` is `Offline`, so the
+engine opens no network at all (`INSTALL OFFLINE`).
+
+### What changed on the machine
+
+The 120 GB gap was split so a payload partition and an install target can
+coexist. `p1` (ESP) and `p2` (LUKS/btrfs) were not touched; only the empty `p3`
+that Stela had created was replaced, with both GPT copies CRC-verified after:
+
+| partition | start LBA | sectors | size | use |
+|---|---|---|---|---|
+| p1 | 2,048 | 4,194,304 | 2.147 GB | Limine ESP (unchanged) |
+| p2 | 4,196,352 | 761,643,008 | 389.961 GB | LUKS root (unchanged) |
+| p3 | 765,839,360 | 62,914,560 | 32.212 GB | FAT32 `STELAPAY`, GUID `cc24a192-1aa2-415f-9de1-d8262bb84a09` |
+| free | 828,753,920 | 171,460,608 | 87.79 GB | the macOS install target |
+
+The medium was written with the tool that already existed for this job, whose
+own help says it writes "the install medium `stela setup --target` puts on the
+USB … to a mounted FAT32 volume":
+
+    stela-dev install-medium --ipsw UniversalMac_27.0.1_26A434_Restore.ipsw \
+        --volume /mnt/stelapayload
+
+    0 pieces kept, 7 written; payload.json SHA-256 2c3092bb…7a67
+    Engine options: --install \stela\install\26A434\payload.json --install-source <GUID>
+
+Seven pieces (`ipsw.000`–`ipsw.006`), `pieces.bin` (13.0 MB), `blocks.bin`
+(11.6 MB) and a `pieces`-layout `payload.json`; the pieces sum to
+26,637,307,067 bytes, exactly the IPSW. No CLI code was needed — the dev command
+and the medium writer were already in the tree, so this session changed data,
+not source.
+
+### The stick now boots the install offline
+
+`choices.cfg`'s Install macOS line gained `--install-source
+cc24a192-1aa2-415f-9de1-d8262bb84a09`, and `setup.json`'s medium record became
+local (`partition_guid` set, `remote: false`, `manifest_sha256 2c3092bb…`,
+`install_image: "full"`). `stela status /dev/sda --full` then reports:
+
+    macOS copy     complete
+    install        Offline: the install needs no internet.
+
+with one expected complaint — "the startup choices differ from the stick's
+setup" — because `choices.cfg` was edited rather than regenerated. **`stela
+repair` must not be run on this stick**: it would rewrite the choices from the
+record's default and reintroduce the network medium.
+
+### Still unproven
+
+Everything up to the engine reading the medium is now verified from Linux: the
+GUID, the layout, the piece sizes, the manifest hash, and that the staged
+answers are on the stick. What is not yet demonstrated is the engine finding the
+partition through the firmware on this machine and the restore running with no
+network — that is the next boot. The `--development-restore` and 87.79 GB free
+space both satisfy the installer's minimum (`DEFAULT_MIN_APPLE_BYTES` = 60 GB).
+
+### The phantom NVIDIA line, again
+
+`All NVIDIA graphics card found: macOS can be installed, but it starts only with
+a GeForce GTX 16 …` is printed on a machine whose only GPU is Intel. It is
+cosmetic, it misleads every reader of a log, and it is still unexplained; it
+belongs to the GPU census's message path, not to this session's work.
