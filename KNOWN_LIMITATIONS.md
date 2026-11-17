@@ -112,3 +112,14 @@ Consequences, which the check now states instead of failing:
   start.
 - A GPU verdict still works, because the census reads configuration space and
   selection (`HOST GPU … xe will bind it`) needs no mount.
+
+## The disk-check lane cannot pass in this tree
+
+`--storage-check` (boot stage, `crates/stela-boot/src/storage.rs::Prepared::run`)
+calls `probe()` without a native mount, so every disk driver fails with
+`native resource service unavailable` and the run stops at
+`STORAGE REFUSED …`. The engine's own disk path needs a real mount
+(`Services::new` over `native_mmio::Source::activate` and `Remappers::take`) and
+the `system-kernel` board model exposes no ANS2, so a disk cannot be attached
+there either. Until one of those is built, disk bring-up is only proven by booting
+a real system, not in QEMU.

@@ -387,3 +387,57 @@ HOST CHECK END pass=6 fail=0 skip=5
 
 Before the change the same lane reported `pass=6 fail=3 skip=2` with three
 `HOST DEVICE FAILED` lines and no explanation.
+
+## Session 5 — the mount's timer, and what it proves about the laptop
+
+### A: the disk-check lane
+
+`cargo xtask boot run --storage-check` (guestless system mode, GPT disks on two
+virtio-blk, NVMe and AHCI) aborts before any disk:
+
+```
+HOST DEVICE FAILED pci=0000:00:01.0 (storage) error=native resource service unavailable
+STORAGE REFUSED stela-virtio:… no disk has serial "stela-virtio"; no disk was found
+STELA FATAL storage target refused
+```
+
+Same root cause as the hardware run (`probe()` with `services = None` in
+`crates/stela-boot/src/storage.rs::Prepared::run`), not Intel-specific. `--iommu
+intel` changes nothing. Fixing it means building a real mount outside the system
+engine (`Services::new` needs `native_mmio::Source::activate` and
+`Remappers::take`, both engine-owned), so it was left as found and recorded.
+
+### A: the engine lane does work, and shows a timer requirement
+
+The engine path (`--scenario system-kernel`, which boots the test kernel with the
+real mount) fails differently, and this is the useful finding:
+
+```
+HOST DEVICE FAILED pci=0000:00:01.0 (storage) error=minimum delay provider: Unavailable
+```
+
+That is `ServiceError::MinimumDelay`, so the mount *is* present here; what is
+missing is its timer. `Services::minimum_delay` takes the TSC only when
+`INVARIANT_TSC` is present, else falls back to the claimed HPET/PM timer, and
+nothing installed one. QEMU under TCG does not advertise an invariant TSC —
+under `--kvm` (host CPU) it does, and then:
+
+```
+ENTRY pc=0x800004000 … el=2 … profile=stela-test-kernel target=x86_64-baseline+ssse3+sse4.1+…
+GUEST| STELA TEST KERNEL: MMU ON, UART MMIO
+STOP idle: every PE is off or waits with no wake source
+```
+
+So the system engine, the native platform and guest execution all work with the
+Intel diagnostics image on this host. The real machine reports
+`invariant-TSC` and `source=Cpuid` (session 4), so the timer path that blocks TCG
+is exactly the path the laptop satisfies — a good omen for the hardware run.
+
+Still not exercised: the engine's disk bring-up. `--storage SERIAL:GUID` with
+`--scenario system-kernel` refuses with `this DeviceTree exposes no modeled
+ANS2`: that scenario's board model has no ANS2 node, so a disk cannot be attached
+to it. Nothing on the host side was changed for this.
+
+Note on exit codes: the run ended with `STOP idle` and `STELA STOPPED code=0x10`
+but xtask returned 124 (its wait expired) because the guestless/debug image does
+not drive the host exit port under `--kvm`; the serial result is unambiguous.

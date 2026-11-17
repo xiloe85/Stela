@@ -117,3 +117,20 @@ A `HOST GPU <address> <vendor>:<device>: xe will bind it` line means the vendor
 stack's admission test accepted the GPU; it does not mean a driver is bound.
 Since the on-stick log ends at ExitBootServices in this lane, PCI census and GPU
 lines only reach the log when they are printed before that point, which they are.
+
+## System-mode smoke test (no macOS image needed)
+
+```sh
+cargo xtask boot run --image target/boot/x86_64-unknown-uefi/release/stela-deploy.efi \
+  --scenario system-kernel --kvm --output /tmp/sys-run
+```
+
+`--kvm` is required: the mount takes its minimum-delay timer from the TSC only
+when it is invariant, and QEMU under TCG does not advertise that, so device
+starts fail with `minimum delay provider: Unavailable`. Expect
+`ENTRY pc=0x800004000`, `GUEST| STELA TEST KERNEL: MMU ON, UART MMIO` and
+`STOP idle` in `/tmp/sys-run/serial.txt`. The harness may still return 124 (its
+wait expires before the image drives the host exit port); judge by the serial.
+
+`--storage-check` is not usable in this tree: it probes without a native mount,
+so no disk can come up (see `KNOWN_LIMITATIONS.md`).
