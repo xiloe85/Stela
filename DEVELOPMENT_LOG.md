@@ -881,3 +881,60 @@ and total once, with `ms=`. If the 774 s collapses on the next boot, the cost
 was the post-ExitBootServices console path and every later test gets ~13
 minutes back. If it does not, the cost is in the INIT itself and the next log
 says so by name. Either way the answer costs one boot.
+
+## Session 9: the boot tax is gone, the claim passed, and Linux started (2026-11-17)
+
+One boot answered three questions at once, and the newest log
+(`/tmp/stick-boot6.txt`, 7 boots kept) is the first run on this machine where
+Linux started at all.
+
+### The 17 minutes were the log lines
+
+| | before | after |
+|---|---|---|
+| `Taking control of the other processors` | 1056 s | **36 s** |
+| `NATIVE FIRMWARE INIT deliveries=15` | 774 s, ~48 s per delivery | **`ms=0`** |
+| `STEP Starting the GPU` at | t=1125.7 s | **t=68.4 s** |
+
+`NATIVE FIRMWARE INIT deliveries=15; … ms=0` settles it: the deliveries were
+always instantaneous, and the 774 s was the one `output::arguments` line printed
+after each — a post-ExitBootServices console write costing ~48 s. Removing that
+line (the caller reports count and time once) cut the step by a factor of 29
+and the boot to the GPU by 16×. This is the cheapest change in the port so far
+by wall-clock returned.
+
+### The claim got past the register BAR
+
+    GPU START phase=claim
+    GPU 0000:00:02.0: reset by Function Level Reset; kept BAR0 16 MiB, BAR2 256 MiB
+    GPU START phase=linux claim_ms=234
+
+So the per-vendor `prefetchable_registers` fix (session 8) did what it was meant
+to: the register BAR was admitted, every memory BAR was mapped against the host's
+aperture, the function was reset by FLR, and the cold bind completed — all in
+234 ms. **This is the first successful Intel GPU claim on this hardware.**
+
+### Linux started, then the record stopped
+
+Seven lines, all at t=68.6 s, then nothing:
+
+    LINUX <6> pid_max: default: 32768 minimum: 301
+    …
+    LINUX <6> VFS: Finished mounting rootfs on nullfs
+    LINUX <6> workingset: timestamp_bits=62 (anon: 57) max_order=21 bucket_order=0 (anon: 0)
+
+No vmlinux panic, no watchdog stop, no fatal: the boot is inside Linux's own
+bring-up with the xe stack linked. The screen is black because the firmware
+console ends with ExitBootServices and nothing draws again until Stela's own
+display path runs — earlier runs never got this far, which is why the step list
+was always visible.
+
+The record stops here for a mundane reason: `output::flush_due()` is called by
+the engine's service loop, and no service loop runs beside the GPU start, so
+Linux's lines stayed in memory. `GpuViews::report` now calls it per line (it
+starts due stores and never waits), so a start that never returns leaves its
+last lines on the stick.
+
+What this does **not** mean: Linux has not finished starting, xe has not
+probed, no firmware has been loaded on the GPU, nothing has drawn anything, and
+macOS has not run. The GPU still does not serve a Metal device.

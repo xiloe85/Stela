@@ -558,6 +558,12 @@ impl Host {
 
     fn report(&self, line: core::fmt::Arguments<'_>) {
         output::arguments(format_args!("LINUX {line}\n"));
+        // The GPU start runs no service loop beside Linux, so nothing else
+        // flushes the USB's log here: a start that never returns left the
+        // stick's record at its last pre-start line (boot-log-hardware,
+        // 2026-11-17: seven Linux lines, then silence). This starts the
+        // stores that are due and never waits for a device.
+        output::flush_due();
     }
 
     /// Whether Linux runs on a processor in the boot CPU's place, which
