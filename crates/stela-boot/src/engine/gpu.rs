@@ -1156,7 +1156,11 @@ fn claim(
     let (mut bars, mut resources) = (Vec::new(), ManuallyDrop::new(Vec::new()));
     let function_bars = function.bars().map_err(ServiceError::Config)?;
     let register_bar = stack.kernel.registers;
-    if let Err(why) = gpu::cold::register_bar(function_bars[register_bar], PAGE) {
+    if let Err(why) = gpu::cold::register_bar(
+        function_bars[register_bar],
+        PAGE,
+        stack.kernel.prefetchable_registers,
+    ) {
         output::arguments(format_args!(
             "GPU {address} register BAR refused: {why:?} BAR{register_bar}={:?}\n",
             function_bars[register_bar]
@@ -1436,6 +1440,7 @@ fn cold_refusal(
 /// (`stela_boot_core::gpu_status`).
 pub(super) struct Refused {
     pub(super) address: String,
+    pub(super) vendor: stela_drivers::gpu::Vendor,
     pub(super) device: u16,
     pub(super) reason: stela_boot_core::gpu_status::Reason,
     /// The refusal's own words, for the screen as for the log.
@@ -1454,6 +1459,7 @@ pub(super) fn claim_all(
     use stela_boot_core::gpu_status::Reason;
     let refused_as = |adapter: &gpu::Adapter, reason, why: &dyn core::fmt::Display| Refused {
         address: format!("{}", adapter.address),
+        vendor: adapter.vendor,
         device: adapter.device,
         reason,
         why: format!("{why}"),

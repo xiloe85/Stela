@@ -1514,6 +1514,7 @@ fn open_gpus(
                 Some((first, rest)) => {
                     crate::status::warn(&gpu_status::refused(
                         &first.address,
+                        first.vendor,
                         first.device,
                         first.reason,
                         &first.why,
@@ -1521,6 +1522,7 @@ fn open_gpus(
                     for gpu in rest {
                         crate::status::info(&gpu_status::refused(
                             &gpu.address,
+                            gpu.vendor,
                             gpu.device,
                             gpu.reason,
                             &gpu.why,

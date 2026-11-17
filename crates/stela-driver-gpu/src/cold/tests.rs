@@ -526,7 +526,7 @@ fn a_translated_function_without_a_function_reset_still_gets_the_bus_reset() {
 }
 
 #[test]
-fn register_bar_names_each_window_nouveau_cannot_map() {
+fn register_bar_names_each_window_a_stack_cannot_map() {
     let memory = |address, size, prefetchable| {
         Some(Bar::Memory {
             address,
@@ -536,30 +536,46 @@ fn register_bar_names_each_window_nouveau_cannot_map() {
         })
     };
     assert_eq!(
-        register_bar(memory(0xfe00_0000, 1 << 24, false), 4096),
+        register_bar(memory(0xfe00_0000, 1 << 24, false), 4096, false),
         Ok(())
     );
-    assert_eq!(register_bar(None, 4096), Err(RegisterBar::Absent));
+    assert_eq!(register_bar(None, 4096, false), Err(RegisterBar::Absent));
     assert_eq!(
         register_bar(
             Some(Bar::Io {
                 port: 0x1000,
                 size: 128
             }),
-            4096
+            4096,
+            false
         ),
         Err(RegisterBar::Io)
     );
     assert_eq!(
-        register_bar(memory(0xfe00_0000, 1 << 24, true), 4096),
+        register_bar(memory(0xfe00_0000, 1 << 24, true), 4096, false),
         Err(RegisterBar::Prefetchable)
     );
     assert_eq!(
-        register_bar(memory(0xfe00_0000, 2048, false), 4096),
+        register_bar(memory(0xfe00_0000, 2048, false), 4096, false),
         Err(RegisterBar::Small)
     );
     assert_eq!(
-        register_bar(memory(0, 1 << 24, false), 4096),
+        register_bar(memory(0, 1 << 24, false), 4096, false),
+        Err(RegisterBar::Unassigned)
+    );
+    // A vendor whose register window decodes prefetchably, as Intel's
+    // GTTMMADR does on this port's laptop, takes the prefetchable BAR and
+    // still refuses every other window a stack cannot map.
+    assert_eq!(
+        register_bar(memory(0x80_1000_0000, 1 << 24, true), 4096, true),
+        Ok(())
+    );
+    assert_eq!(
+        register_bar(memory(0x80_1000_0000, 2048, true), 4096, true),
+        Err(RegisterBar::Small)
+    );
+    assert_eq!(
+        register_bar(memory(0, 1 << 24, true), 4096, true),
         Err(RegisterBar::Unassigned)
     );
 }

@@ -325,31 +325,40 @@ impl<P: Preparation, V: Views<P::Config>> Cold<P, V> {
     }
 }
 
-/// Why BAR 0 cannot be the register window nouveau maps.
+/// Why the register BAR cannot be the window the stack maps.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegisterBar {
-    /// BAR 0 decodes nothing: it reads as unimplemented.
+    /// The BAR decodes nothing: it reads as unimplemented.
     Absent,
-    /// BAR 0 is an I/O BAR.
+    /// The BAR is an I/O BAR.
     Io,
-    /// BAR 0 is prefetchable, where NVIDIA's register window is not.
+    /// The BAR is prefetchable, where this vendor's register window is not.
     Prefetchable,
-    /// BAR 0 is smaller than one page.
+    /// The BAR is smaller than one page.
     Small,
-    /// BAR 0 holds no address: firmware assigned it none, and nothing here
+    /// The BAR holds no address: firmware assigned it none, and nothing here
     /// assigns one as Linux's resource allocator would.
     Unassigned,
 }
 
-/// Check that BAR 0 is NVIDIA's register window: an assigned,
-/// non-prefetchable memory BAR of at least `page` bytes.
-pub fn register_bar(bar: Option<Bar>, page: u64) -> Result<(), RegisterBar> {
+/// Check that the stack's register BAR is the window it maps: an assigned
+/// memory BAR of at least `page` bytes. `prefetchable_registers` is the
+/// stack's own answer ([`crate::stack::Kernel::prefetchable_registers`]):
+/// nouveau's window never decodes prefetchably, so a BAR that does is some
+/// other window, where Intel's GTTMMADR does, as firmware assigns it
+/// (`Region 0: Memory at 8010000000 (64-bit, prefetchable) [size=16M]` on
+/// the laptop this port was written for), and is the window there.
+pub fn register_bar(
+    bar: Option<Bar>,
+    page: u64,
+    prefetchable_registers: bool,
+) -> Result<(), RegisterBar> {
     match bar {
         None => Err(RegisterBar::Absent),
         Some(Bar::Io { .. }) => Err(RegisterBar::Io),
         Some(Bar::Memory {
             prefetchable: true, ..
-        }) => Err(RegisterBar::Prefetchable),
+        }) if !prefetchable_registers => Err(RegisterBar::Prefetchable),
         Some(Bar::Memory { size, .. }) if size < page => Err(RegisterBar::Small),
         Some(Bar::Memory { address: 0, .. }) => Err(RegisterBar::Unassigned),
         Some(Bar::Memory { .. }) => Ok(()),

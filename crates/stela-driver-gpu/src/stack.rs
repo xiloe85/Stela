@@ -24,6 +24,9 @@ pub struct Kernel {
     /// The BAR of the device's register window, whose first page the boot
     /// reads before the function's reset.
     pub registers: usize,
+    /// Whether that window decodes prefetchably, so a prefetchable BAR is
+    /// the window rather than another one (`cold::register_bar`).
+    pub prefetchable_registers: bool,
     /// The address bits of the DMA mask the driver sets on this device; a
     /// mapping past it is refused, not truncated.
     pub dma_bits: fn(&Adapter) -> u8,
@@ -83,6 +86,9 @@ pub static NVIDIA: GpuStack = GpuStack {
         // with a chip it does not know is its probe's answer.
         admits: |_| Ok(()),
         registers: 0,
+        // BAR 0 decodes non-prefetchably on every NVIDIA display function;
+        // a prefetchable one there is not the register window.
+        prefetchable_registers: false,
         // The Turing-and-later MMUs' `dma_bits` (`nvkm/subdev/mmu/tu102.c`
         // 47, `gh100.c` 52), which `nvkm_device_pci_new` sets as the mask.
         dma_bits: |_| 47,
@@ -114,6 +120,8 @@ pub static AMD: GpuStack = GpuStack {
         // `rmmio_base` of every family from Bonaire on (`amdgpu_device.c`);
         // BAR 0 is the memory aperture. The older families are refused.
         registers: 5,
+        // BAR 5 decodes non-prefetchably, as firmware programs it.
+        prefetchable_registers: false,
         // The mask the device's memory controller block sets
         // (`gmc_v*_0.c`), or the narrowest of those IP discovery chooses.
         dma_bits: crate::amdgpu::dma_bits,
@@ -143,6 +151,10 @@ pub static INTEL: GpuStack = GpuStack {
         admits: crate::xe::admits,
         // GTTMMADR (`regs/xe_bars.h`): the registers, then the GTT.
         registers: 0,
+        // Firmware marks GTTMMADR prefetchable, and `i915` maps it as it
+        // finds it: this port's laptop reports `Region 0: Memory at
+        // 8010000000 (64-bit, prefetchable) [size=16M]` under Linux.
+        prefetchable_registers: true,
         // The platform's `dma_mask_size` (`xe_pci.c`), which
         // `xe_set_dma_info` sets as the mask.
         dma_bits: crate::xe::dma_bits,
@@ -427,6 +439,17 @@ mod tests {
             crate::xe::admits(&unknown).err()
         );
         assert!(crate::xe::admits(&unknown).is_err());
+    }
+
+    #[cfg(feature = "xe-port")]
+    #[test]
+    fn only_intels_register_window_decodes_prefetchably() {
+        // GTTMMADR is prefetchable where firmware assigns it; nouveau's and
+        // amdgpu's windows are not, so there a prefetchable BAR is refused.
+        assert!(INTEL.kernel.prefetchable_registers);
+        assert!(!NVIDIA.kernel.prefetchable_registers);
+        #[cfg(feature = "amdgpu-port")]
+        assert!(!AMD.kernel.prefetchable_registers);
     }
 
     #[cfg(feature = "xe-port")]

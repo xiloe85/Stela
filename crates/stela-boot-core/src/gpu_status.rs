@@ -43,10 +43,21 @@ pub fn phase_entered(index: usize, claim_ms: Option<u64>) -> String {
     }
 }
 
-/// The screen line for the NVIDIA GPU `device` at PCI `address` that did
-/// not start for `reason`, `why` the refusal's own words (empty without
-/// any): a screen is often all a report brings.
-pub fn refused(address: &str, device: u16, reason: Reason, why: &str) -> String {
+/// The screen line for the display adapter `vendor` makes at PCI `address`,
+/// `device`, that did not start for `reason`, `why` the refusal's own words
+/// (empty without any): a screen is often all a report brings. An NVIDIA
+/// adapter is named with the generation Stela needs; one of another vendor,
+/// whose stack Stela drives but has not yet run on that hardware, is named
+/// with what it is and what the claim refused, since the generation list
+/// says nothing about it.
+pub fn refused(address: &str, vendor: Vendor, device: u16, reason: Reason, why: &str) -> String {
+    if vendor != Vendor::Nvidia {
+        let found = format!("{} (device {device:04x})", adapter_at(vendor, address));
+        return match why.is_empty() {
+            true => format!("{found} did not start; the boot log on this USB says why"),
+            false => format!("{found} did not start: {why}. The boot log on this USB has the rest"),
+        };
+    }
     match (nvidia_chip(device), reason) {
         (None, _) => format!(
             "the NVIDIA GPU at {address} (device {device:04x}) is not supported: Stela needs \
@@ -234,18 +245,29 @@ pub fn bar_sizes(bars: &[(usize, u64)]) -> String {
     named.join(", ")
 }
 
-/// How the screen names a display adapter: its maker, PCI address and
-/// device ID.
-pub fn adapter(adapter: &Adapter) -> String {
-    let maker = match adapter.vendor {
+/// How the screen names the display adapter `vendor` makes at PCI `address`,
+/// a [`Adapter::address`] or the claim's own words for it.
+fn adapter_at<A: core::fmt::Display>(vendor: Vendor, address: A) -> String {
+    format!("the {} display adapter at {address}", maker(vendor))
+}
+
+/// The maker's name as the screen says it.
+fn maker(vendor: Vendor) -> String {
+    match vendor {
         Vendor::Nvidia => String::from("NVIDIA"),
         Vendor::Amd => String::from("AMD"),
         Vendor::Intel => String::from("Intel"),
         Vendor::Other(id) => format!("PCI vendor {id:04x}"),
-    };
+    }
+}
+
+/// How the screen names a display adapter: its maker, PCI address and
+/// device ID.
+pub fn adapter(adapter: &Adapter) -> String {
     format!(
-        "the {maker} display adapter at {} (device {:04x})",
-        adapter.address, adapter.device
+        "{} (device {:04x})",
+        adapter_at(adapter.vendor, &adapter.address),
+        adapter.device
     )
 }
 
@@ -282,17 +304,26 @@ mod tests {
     #[test]
     fn a_start_names_each_phase_it_reaches() {
         assert_eq!(phase_entered(0, None), "GPU START phase=claim");
-        assert_eq!(phase_entered(1, Some(214)), "GPU START phase=linux claim_ms=214");
+        assert_eq!(
+            phase_entered(1, Some(214)),
+            "GPU START phase=linux claim_ms=214"
+        );
         assert_eq!(phase_entered(2, None), "GPU START phase=probe");
         assert_eq!(phase_entered(3, None), "GPU START phase=unknown");
     }
 
     #[test]
     fn a_refused_gpu_is_named_with_its_fix() {
-        let missing = refused("01:00.0", 0x2484, Reason::MissingFirmware, "");
+        let missing = refused(
+            "01:00.0",
+            Vendor::Nvidia,
+            0x2484,
+            Reason::MissingFirmware,
+            "",
+        );
         assert!(missing.contains("NVIDIA ga104 GPU"), "{missing}");
         assert!(missing.ends_with("run `stela repair`"), "{missing}");
-        let other = refused("03:00.0", 0x2b85, Reason::Other, "");
+        let other = refused("03:00.0", Vendor::Nvidia, 0x2b85, Reason::Other, "");
         assert_eq!(
             other,
             "the NVIDIA gb202 GPU at 03:00.0 did not start; the boot log on this USB says why"
@@ -301,6 +332,7 @@ mod tests {
         // brings.
         let named = refused(
             "01:00.0",
+            Vendor::Nvidia,
             0x28a0,
             Reason::Other,
             "the GPU's register BAR does not decode",
@@ -315,13 +347,45 @@ mod tests {
     #[test]
     fn an_older_gpu_or_none_names_what_is_supported() {
         // A GeForce GTX 1080 (Pascal, gp104).
-        let pascal = refused("01:00.0", 0x1b80, Reason::MissingFirmware, "");
+        let pascal = refused(
+            "01:00.0",
+            Vendor::Nvidia,
+            0x1b80,
+            Reason::MissingFirmware,
+            "",
+        );
         assert_eq!(
             pascal,
             "the NVIDIA GPU at 01:00.0 (device 1b80) is not supported: Stela needs an NVIDIA \
              GeForce GTX 16 or RTX 20, 30, 40 or 50 series GPU"
         );
         assert!(none(&[]).starts_with("this PC has no NVIDIA GPU: Stela needs"));
+    }
+
+    #[test]
+    fn a_refused_intel_gpu_is_named_as_itself_not_as_an_nvidia_one() {
+        // This port's Arc 140T, refused at the claim's register BAR before
+        // the fix that admitted a prefetchable GTTMMADR: the line names an
+        // Intel adapter, never a GeForce generation the PC does not have.
+        let arc = refused(
+            "0000:00:02.0",
+            Vendor::Intel,
+            0x7d51,
+            Reason::Other,
+            "the GPU's register BAR is not an assigned register window",
+        );
+        assert_eq!(
+            arc,
+            "the Intel display adapter at 0000:00:02.0 (device 7d51) did not start: the GPU's \
+             register BAR is not an assigned register window. The boot log on this USB has the \
+             rest"
+        );
+        assert!(!arc.contains("NVIDIA"), "{arc}");
+        assert_eq!(
+            refused("0000:00:02.0", Vendor::Intel, 0x7d51, Reason::Other, ""),
+            "the Intel display adapter at 0000:00:02.0 (device 7d51) did not start; the boot log \
+             on this USB says why"
+        );
     }
 
     #[test]
