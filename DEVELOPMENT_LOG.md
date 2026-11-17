@@ -769,3 +769,91 @@ refusal would be the first proof on this machine that Stela's Intel stack
 selects, identifies and asks for the right firmware; it is not acceleration,
 and it is not a working boot. **`stela repair` must not be run on this stick**:
 it would rewrite the startup choices and bring the network medium back.
+
+## Session 8: the first xe boot on the Arc 140T, and the BAR policy that stopped it (2026-11-17)
+
+The xe image (`STELA_XE=1`, `stela-deploy.efi` `eba04fb7…dd67`) was booted on the
+laptop. It reached the GPU step and printed the phase the diagnostics were built
+for, then refused — for a reason that has nothing to do with Intel support. Stela
+rejected the register BAR.
+
+### What the stick's log says
+
+`stela log /dev/sda -o /tmp/stick-boot5.txt` (6 boots; the newest ran from
+t=10.3 s to `STELA STOPPED` at t=1170.9 s):
+
+| line | meaning |
+|---|---|
+| `HOST GPU 0000:00:02.0 8086:7d51: xe will bind it` (t=18.7 s, before EBS) | the Intel stack selects this Arc 140T |
+| `HOST FIRMWARE BUNDLE USE i915/mtl_guc_70.bin bytes=320320 for pci 8086:7d51`, and the same for `mtl_huc_gsc` (561,152), `mtl_gsc_1` (1,142,784), `mtl_dmc` (52,712) | **the stick's bundle already held all four Meteor Lake blobs** — no `stela repair`, no network, nothing to fetch |
+| `HOST FIRMWARE phase=before-ebs images=25 bytes=6767957` | the bundle prefetched 25 images for this boot |
+| `STEP Starting the GPU t=1125.710`, then `GPU START phase=claim` | the stage was entered and its phase printed |
+| `GPU 0000:00:02.0 register BAR refused: Prefetchable BAR0=Some(Memory { address: 550024249344, size: 16777216, prefetchable: true, wide: true })` | BAR0 = `0x8010000000`, 16 MiB, 64-bit, prefetchable |
+| `GPU 0000:00:02.0 refused: Refused("the GPU's register BAR is not an assigned register window")`, `STEP w … ms=8` | the claim ended in **8 ms** — it never hung |
+| `STELA FATAL macOS cannot run without a GPU` … `STELA STOPPED code=0x11; power off to continue` (t=1170.932) | the boot stopped on its own |
+
+Two corrections to the previous session's expectations. The four blobs were
+already on the stick. And the long wait was **not** the GPU step: it was
+`Taking control of the other processors`, which took **1056 s** on this boot
+(36 s, 108 s and 248 s on earlier ones). Stela's own x86 GPU stage is
+milliseconds; the picture that sat on "Starting the GPU" was the screen not
+repainting after the stop, not a hang in the claim.
+
+### Why the BAR was refused, and why the refusal was wrong
+
+`stela-driver-gpu`'s `cold::register_bar` refused every prefetchable BAR:
+
+    Some(Bar::Memory { prefetchable: true, .. }) => Err(RegisterBar::Prefetchable),
+
+That rule is nouveau's. NVIDIA's BAR0 register window never decodes
+prefetchably, so a prefetchable BAR0 on an NVIDIA function is some other window.
+Linux on this same laptop, with `i915` bound to the device right now, reports
+
+    0000:00:02.0 Region 0: Memory at 8010000000 (64-bit, prefetchable) [size=16M]
+                 Region 2: Memory at 8000000000 (64-bit, prefetchable) [size=256M]
+
+— the same address, size and flags Stela decoded. Intel's GTTMMADR really is
+prefetchable on this platform, and its driver maps it as it finds it. Stela's
+BAR reader was right; the policy around it was NVIDIA's.
+
+### The fix
+
+- `stack::Kernel` gains `prefetchable_registers: bool`: `false` for nouveau and
+  amdgpu, `true` for xe, each with its evidence in the field's doc comment.
+- `cold::register_bar` takes that flag. Every other refusal (absent, I/O,
+  smaller than a page, unassigned) is unchanged for every vendor, so an Intel
+  BAR that is small or unassigned is still refused.
+- The screen no longer calls an Intel GPU an NVIDIA one. `gpu_status::refused`
+  takes the vendor: an NVIDIA adapter is still named with the generation Stela
+  needs, while another vendor is named as itself and quotes the claim's own
+  words. The previous line read "the NVIDIA GPU at 0000:00:02.0 (device 7d51) is
+  not supported", which is both false and useless in a report.
+
+| check | result |
+|---|---|
+| `cargo test -p stela-driver-gpu` | `GPU_TEST_EXIT=0` (39 unit tests and the integration suites) |
+| `cargo test -p stela-boot-core` | `CORE_TEST_EXIT=0` |
+| `cd crates/stela-boot && cargo check --features xe --target x86_64-unknown-uefi` | `BOOT_XE_EXIT=0` |
+
+The tests cover both policies: a prefetchable BAR is still refused for nouveau,
+still `Small` or `Unassigned` under xe's policy, and an Intel refusal line
+contains no "NVIDIA".
+
+### Where the port stands
+
+The claim now gets past the register BAR **on paper only**; it has not been run
+again. The refusals behind it in the same function are the next ones: each
+memory BAR against the host's aperture (`services.bar_resource` and the
+physical-span check), the identity read of the first page, the cold reset and
+bind, and then xe's own probe. BAR0 sits at `0x8010000000`, above 4 GiB, so the
+aperture and mapping path is the most likely next wall. None of this is
+acceleration, and nothing here ran under macOS.
+
+The corrected image is on the stick and has **not** been booted. It was built
+after the formatting and the checks above
+(`STELA_XE=1 cargo xtask boot build --release`, 7m 36s, `BUILD_EXIT=0`) and
+written to `EFI/BOOT/BOOTX64.EFI` as sha256 `10849f43…a44a`; the xe image that
+produced this log is kept at
+`~/Downloads/stela-backup/BOOTX64-xe-barfix-2026-11-17.efi` (`eba04fb7…dd67`),
+and the NVIDIA-only loader before it at
+`~/Downloads/stela-backup/BOOTX64-nvidia-2026-11-17.efi` (`c521aafc…bfe5`).

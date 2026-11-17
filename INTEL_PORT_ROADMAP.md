@@ -22,7 +22,7 @@ Status vocabulary: **done** / **in progress** / **not started** / **blocked**.
 `GPU_BACKEND_DESIGN.md`: four approaches compared; **xe + ANV + BRW** chosen,
 with the module map, execution flow, memory design and test strategy.
 
-## M3 — Intel GPU initialization  → **in progress (selection and image build proven, probe not run)**
+## M3 — Intel GPU initialization  → **in progress (the claim reaches the hardware and is refused at the register BAR; fixed, not yet re-run)**
 
 Done: the Intel-only configuration compiles (`build.rs`'s `kbuild` gate,
 `build/xe.rs`'s import list), an Arrow Lake admission test passes, the xe
@@ -30,6 +30,16 @@ firmware family is wired into the loader bundle, and **the real machine now
 answers the selection question**: `HOST GPU 0000:00:02.0 8086:7d51: xe will bind
 it` (`boot-log-hardware-2026-11-16.log`, `DEVELOPMENT_LOG.md` session 4). That is
 the admission test on the physical Arc 140T; it is not a bound device.
+
+The xe image has since been booted on the laptop (session 8). It reached
+`GPU START phase=claim` with all four `mtl_*` blobs already in the stick's
+bundle, and the claim ended in 8 ms refusing the **register BAR**: firmware
+assigns GTTMMADR prefetchable (`Region 0: Memory at 8010000000 (64-bit,
+prefetchable) [size=16M]`, as Linux reports the same device with `i915`
+bound), and `cold::register_bar` was enforcing nouveau's non-prefetchable
+rule on every vendor. That rule is now per-stack
+(`Kernel::prefetchable_registers`). Nothing is proven by it until the claim
+is run again.
 Not done: xe probe under Stela, firmware load, GuC/HuC/GSC claim, any modeset.
 
 Already upstream: xe compiles with shared i915 display; tables generated;
@@ -59,7 +69,11 @@ Status of the missing steps:
    so by name instead of failing generically.
 4. Bring up xe probe inside Stela's Linux environment: BAR0 mapping, DMA
    mask 46 bits (not 39 — the descriptor's `dma_mask_size`), interrupts/IRQ
-   domain, PPGTT, memory region.
+   domain, PPGTT, memory region. **In progress**: the claim's register-BAR
+   admission admits Intel's prefetchable GTTMMADR (session 8); the BAR
+   aperture, identity read, cold reset/bind and the probe itself have not run.
+   BAR0 is at `0x8010000000`, above 4 GiB, so the aperture path is the next
+   likely refusal.
 5. Display: hand the VBT (OpRegion reader exists, no caller) to xe's display
    code; get a modeset on eDP.
 6. **done** — the step names its phase before entering it (`GPU START
