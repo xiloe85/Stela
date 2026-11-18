@@ -2072,6 +2072,9 @@ fn mount_and_start(
     // SAFETY: the ready original task broker keeps the callback and all
     // original owners until its genuine managed child has joined.
     let pending = unsafe { threads.submit(job) }.map_err(|refusal| Error::Submit(refusal.error))?;
+    // A start whose record ends at `probe` has not said whether Linux took
+    // the probe at all: this mark does, before the wait takes any step.
+    stage_mark(started, "submit done");
     wait_for_child(runtime, threads, time, deadline, &PROBE, || {
         pending.status().joined
     })?;
@@ -2125,9 +2128,20 @@ fn wait_for_child(
     let began_ns = time.now_ns().map_err(environment_error)?;
     let mut steps = 0u64;
     let mut reports = 0u64;
+    let mut marked = false;
     loop {
         // SAFETY: runtime is on its dispatcher after real physical return.
         unsafe { threads.dispatcher_step() }.map_err(Error::Threads)?;
+        if !marked {
+            marked = true;
+            // One line per wait, the first time a step returns: a record that
+            // stops at the wait's stage mark never got this far.
+            output::arguments(format_args!(
+                "GPU START wait-step stage={stage} ms={}\n",
+                output::millis_since(began)
+            ));
+            super::storage::store_usb_log_in_gpu_start();
+        }
         if finished() {
             super::storage::store_usb_log_in_gpu_start();
             return Ok(());

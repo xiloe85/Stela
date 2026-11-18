@@ -60,6 +60,23 @@ start that spins inside one call holds the boot for as long as it spins (boot 9:
 at least 742 s of it; boot 10: not finished in 1020 s). `stage_mark` brackets
 those calls now, so the next boot times them (`GPU START stage=linux-initial
 done ms=…`) instead of leaving a cliff.
+
+Boot 11 (2026-11-18, same image, left alone for an hour) answered that and
+moved the cliff 100 ms later: `stage=linux-initial ms=24` → `done ms=28`, so
+the call boot 10 never returned from took **4 ms**; `srcu` took 7 ms; Linux's
+first tasks ran; and `stage=probe ms=76` is the last line the stick holds. The
+same image both stalled for 17+ minutes inside `start_initial` and passed it in
+4 ms, so this is a race in Linux's task start that moves between calls, not a
+slow path. Because `gpu::open` must return within `START_SECONDS` (60 s) and
+`start.rs` prints and stores `GPU START claim_ms=… linux_ms=… probe_ms=…
+total_ms=…` when it does, that line's absence says the start never returned:
+one call after the probe mark — `threads.submit(job)` or the first
+`threads.dispatcher_step()` — did not come back. The stop's reason is not on
+the stick (a stop inside the host drivers cannot store it); it is kept in the
+PC's firmware (`StelaStopHeader`, GUID
+`b3e1f6a4-2c5d-4e8f-9a17-6d0c53a7e142`) for the next Stela start to copy into
+the log, and Linux's efivarfs does not expose that GUID, so it takes one more
+start to read it.
 **The screen goes black exactly when the claim succeeds, and boot 9 shows the
 mechanism.** `display.rs` starts from this premise: binding a GPU ends the
 firmware's framebuffer on that function, so Stela's console moves to the

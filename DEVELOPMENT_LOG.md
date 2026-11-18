@@ -1391,3 +1391,98 @@ Image `424755338e3490addfc15437e9fc316a081603e375e580fc7ceeae47d9ea1211`,
 53,831,680 bytes, written to the stick and hash-verified;
 `BOOTX64-boot9-2026-11-18.efi` remains the rollback (the image that installed
 macOS). The stick's EFI partition has no room for a third image.
+
+## Session 12 — boot 11: `start_initial` returns in 4 ms, and the start dies at the probe handover (2026-11-18)
+
+Boot 11 ran the same image as boot 10 (`424755338e3490addfc15437e9fc316a0816
+03e375e580fc7ceeae47d9ea1211`) and was left alone for an hour. Its log is
+conclusive about where the boot is, and none of it is what boot 10 suggested.
+
+### The record
+
+The stick's ring holds 4,190,208 bytes of stream; the header counts 40,410,858
+bytes written over 11 boots and a valid SHA-256, so 36,220,650 bytes had been
+overwritten before boot 11 began. Boot 11 is complete from `STELA UEFI MOUNT
+version=0.4.2` (t=12.318) to its last line at t=105.141:
+
+    [ 100.782] STEP Starting the PC's disks and USB devices t=100.780
+    [ 104.814] STEP o Starting the PC's disks and USB devices (1 partition, 4 s) ms=4033
+    [ 104.822] STEP Starting the GPU t=104.822
+    [ 104.826] GPU START phase=claim
+    [ 105.060] GPU 0000:00:02.0: reset by Function Level Reset; kept BAR0 16 MiB, BAR2 256 MiB
+    [ 105.061] BOOT LOG not stored: this processor stopped inside the host drivers
+    [ 105.061] GPU START phase=linux claim_ms=234
+    [ 105.089] GPU START stage=linux-initial ms=24
+    [ 105.093] GPU START stage=linux-initial done ms=28
+    [ 105.107] GPU START stage=srcu ms=41
+    [ 105.113] GPU START stage=srcu done ms=48
+    LINUX <6> … built-in initcalls: workingset done (0)
+    LINUX <6> stela: built-in initcalls done; resource roots complete
+    LINUX <6> stela: threads: supervisor claimed pid 1
+    LINUX <6> stela: threads: kthreadd claimed pid 2
+    LINUX <6> stela-init: kthreadd entered; starting the workqueues
+    [ 105.141] GPU START stage=probe ms=76
+
+Nothing follows, in an hour. The boot was 300 s faster than boot 9 to this
+point (EBS 36.3 s, the other processors 71.4 s, disks 4.0 s), the claim is
+identical (234 ms, FLR, BAR0/BAR2 kept), and the whole Linux start — initial
+start, SRCU bootstrap and the wait for Linux's first tasks — took 76 ms.
+
+### What the timing says
+
+`stage=linux-initial ms=24` → `done ms=28` is the measurement boot 10 could not
+produce: the call boot 10 sat in for 17+ minutes returned in **4 ms**. `srcu`
+took 7 ms, and the `wait_for_child` for Linux's first tasks ran and returned,
+which is why the seven `LINUX` lines appear between `srcu done` and `probe`
+(boot 10 never reached them at its stall). So the stall is not one fixed call:
+the same image stalls inside `start_initial` in one boot and passes it in
+another, then stalls later. That is a race in Linux's task start, not a slow
+path, and it moves between boots.
+
+After `stage=probe` the start must return within `START_SECONDS` (60 s) — the
+wait loop checks a counter-based budget as well as Linux's clock — and
+`start.rs` then prints and stores `GPU START claim_ms=… linux_ms=… probe_ms=…
+total_ms=…` inside the start's own scope. That line is absent, so `gpu::open`
+never returned: one call after the mark did not come back, either
+`threads.submit(job)` (handing the probe to Linux) or the first
+`threads.dispatcher_step()`. The 30 s step watchdog is armed at t=100.506 and
+stops the boot on exactly such a call.
+
+### Why the stick does not hold the reason
+
+A stop inside the host drivers cannot store the USB's log (`BOOT LOG not
+stored: this processor stopped inside the host drivers`, t=105.061), so
+`output::fatal` keeps its newest lines in the PC's firmware
+(`stop_record::keep`, variable `StelaStopHeader`, GUID
+`b3e1f6a4-2c5d-4e8f-9a17-6d0c53a7e142`) and the *next* Stela start copies them
+into the log (`stop_record::carry`, `main.rs`). Linux's efivarfs does not
+expose that GUID — `/sys/firmware/efi/efivars` holds firmware and OS vendor
+variables and no `stela*` entry — so the stop's reason (the stuck step, its
+task and job, the interrupted instruction pointer and stack) needs one more
+start of the stick to reach a file this machine can read.
+
+The machine-state log on `nvme0n1p4` is unchanged (head 39,800,248, 3 boots,
+newest an old `register BAR refused` failure), which agrees: the boot never
+reached the macOS system start that writes it.
+
+### The change this produced
+
+`gpu.rs`, logging only, two marks:
+
+- `GPU START stage=submit done ms=…` right after `threads.submit(job)`, so a
+  record ending on `stage=probe` no longer leaves the handover unmeasured.
+- `GPU START wait-step stage=<Linux's first tasks|the GPU's probe> ms=…` once
+  per wait, the first time `threads.dispatcher_step()` returns, so a wait that
+  never takes a step is distinguishable from one that steps forever.
+
+Nothing else changed: the boot's behaviour, its timeouts and its failure paths
+are the ones boot 11 ran, so this remains a measurement image.
+
+Next start of the stick should be watched for three things in order: the
+carried `STELA FATAL` lines from boot 11 at the top of boot 12's record,
+`submit done`, and `wait-step stage=the GPU's probe`.
+
+Image `abf8a3fe73996a275ac145300e929cd3f659eba46f17f2542d5e820db81a3506`,
+53,832,704 bytes, written to the stick and hash-verified;
+`BOOTX64-boot9-2026-11-18.efi` remains the rollback (the image that installed
+macOS).
