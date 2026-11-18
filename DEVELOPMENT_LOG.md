@@ -1308,3 +1308,86 @@ core. The figure is a per-core allocation-versus-free counter, so a block
 allocated on one core and freed on another drives it negative; the size is
 larger than the whole heap, which suggests a wrap rather than a real number.
 Diagnostics only.
+
+## Session 11 — boot 10, the installed system, and a log that stops at the GPU
+
+Boot 10 (2026-11-18, morning) was the first run of the image built after the
+boot-9 audit, and the first boot of the *installed* system: the stick's
+untouched entry is the `macOS` line, so the run built its bundle from
+`Stela macOS` on the internal SSD rather than from the installer. Nothing was
+displayed for 17 minutes; the machine was powered off by hand.
+
+### What the log does say
+
+The boot was 300 s faster to reach the GPU than boot 9:
+
+| | boot 9 | boot 10 |
+|---|---|---|
+| boot services exit | 83.7 s | 36.3 s (`STEP DETAIL the firmware's last boot services ms=36282`) |
+| taking the other processors | 360 s | 71.4 s (`ms=71403`) |
+| disks and USB devices | 4.6 s | 4.6 s |
+| step began | 399.478 s | 101.410 s |
+| claim | FLR, `kept BAR0 16 MiB, BAR2 256 MiB`, 234 ms | identical, `claim_ms=234` |
+
+So the AP handoff and the firmware exit, the two items the audit left open,
+both came in at a third of their former cost, and the claim on `8086:7d51`
+succeeded for the second time.
+
+### What it does not say
+
+The stick's record ends 0.33 s into the GPU start:
+
+    [  101.410] STEP Starting the GPU t=101.410
+    [  101.428] GPU START phase=claim
+    [  101.663] GPU 0000:00:02.0: reset by Function Level Reset; kept BAR0 16 MiB, BAR2 256 MiB
+    [  101.663] BOOT LOG not stored: this processor stopped inside the host drivers
+    [  101.663] GPU START phase=linux claim_ms=234
+    [  101.716] LINUX <6> pid_max: …
+    [ 101.744] LINUX <6> stela-init: kthreadd entered; starting the workqueues
+
+69,042 bytes were written in the whole run. Missing: the `GPU START waiting
+for …` report that `wait_for_child` prints every two seconds, the
+`GPU START claim_ms=… linux_ms=… probe_ms=… total_ms=…` result, `[ok] Starting
+the GPU` or its warn, every display line, `STEP Starting macOS` and every
+guest row. Boot 9's record ended at the same seven Linux lines and then
+resumed 742 s later with the installer's console, which is why the audit read
+that gap as a failed start; the truth is narrower — the stick is simply not
+written there.
+
+### What narrows it
+
+1. `STEP WATCHDOG on: a Linux step that does not return within 30 s stops the
+   boot (Intel fixed counter 1)` is armed at t=96.499 and never fires. Steps
+   kept returning, so the boot was not wedged inside one step: it was looping
+   or waiting, alive.
+2. The `wait_for_child` reports never appear, so the start never reached its
+   two wait loops. The time is inside `start_initial` (`start_initial` →
+   `environment().start(...)`), which is where "starting the workqueues" is
+   printed — a single call that Stela cannot interrupt, time out or log from
+   the inside.
+3. The store *does* work inside the start: the claim line and the seven Linux
+   lines reached the stick through `GpuViews::report`, which is why a
+   `store_usb_log` from `stage_mark` (the change below) will be recorded.
+4. The machine-state log on the SSD holds three boots and boot 10 is not one of
+   them, so there is no second view. Its newest entry is an old failure —
+   `GPU 0000:00:02.0 register BAR refused: Prefetchable BAR0=…` then
+   `macOS cannot run without a GPU` — which is the failure the claim work
+   removed.
+
+So boot 10 is *inconclusive*, not failed: nothing says macOS started, nothing
+says it did not, and a black panel is what this port produces in either case
+because no display has ever been taken.
+
+### The change this produced
+
+`gpu.rs`: `stage_mark` prints and stores `GPU START stage=<name> ms=<ticks
+since the start began>` at `linux-initial`, `linux-initial done`, `srcu`,
+`srcu done` and `probe`, and `wait_for_child` now says once whether it could
+store. The marks are the only way a single-threaded call can be timed from
+outside: `linux-initial done ms=…` will carry however long the workqueues took,
+and a boot that ends at `stage=linux-initial` is a call that had not returned.
+
+Image `424755338e3490addfc15437e9fc316a081603e375e580fc7ceeae47d9ea1211`,
+53,831,680 bytes, written to the stick and hash-verified;
+`BOOTX64-boot9-2026-11-18.efi` remains the rollback (the image that installed
+macOS). The stick's EFI partition has no room for a third image.

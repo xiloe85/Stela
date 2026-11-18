@@ -47,7 +47,19 @@ be wrong as well: a failed start does not stop the boot at all, since
 `open_gpus` returning false only skips `gpu::serve`. What is certain is that
 nothing was ever presented (`CURSOR moved_per_wall_second=0.0`, `samples=0`).
 The start's own report is now printed inside the start's scope and stored from
-there, which is what the next boot reads.
+there — and boots 9 and 10 both end the stick's record at those same seven
+`LINUX` lines, which is a limit of the log rather than a verdict on the start.
+The store does work inside the start (boot 10 kept the claim line and those
+seven lines, written by `GpuViews::report`); what is missing is anything left to
+print. Boot 10's `wait_for_child` reports never appear at all, so in 17 minutes
+the start had not reached either wait loop: the time is inside `start_initial`
+→ `environment().start(...)`, one call that nothing in this tree bounds.
+`START_SECONDS` (60 s) is checked only between steps in `wait_for_child`, and
+the 30 s step watchdog fires only when a single step fails to return, so a Linux
+start that spins inside one call holds the boot for as long as it spins (boot 9:
+at least 742 s of it; boot 10: not finished in 1020 s). `stage_mark` brackets
+those calls now, so the next boot times them (`GPU START stage=linux-initial
+done ms=…`) instead of leaving a cliff.
 **The screen goes black exactly when the claim succeeds, and boot 9 shows the
 mechanism.** `display.rs` starts from this premise: binding a GPU ends the
 firmware's framebuffer on that function, so Stela's console moves to the

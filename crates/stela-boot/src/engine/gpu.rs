@@ -1974,6 +1974,23 @@ type MountedStartup = (
     ManuallyDrop<Started>,
 );
 
+/// Put a stage of Linux's start on the screen and the stick, with the ticks
+/// since the start began.
+///
+/// The start runs on one processor, so a call that does not return leaves its
+/// last mark the only evidence of where the boot went. The stick's record of
+/// 2026-11-18 ended inside Linux's initial start ("kthreadd entered; starting
+/// the workqueues") with no line saying whether that call ever returned, and
+/// 17 minutes passed without another byte: the marks name the call and, when
+/// it does return, how long it held the boot.
+fn stage_mark(began: u64, what: &'static str) {
+    output::arguments(format_args!(
+        "GPU START stage={what} ms={}\n",
+        output::millis_since(began)
+    ));
+    output::store_usb_log();
+}
+
 fn mount_and_start(
     work: &'static KernelWork,
     runtime: Pin<&'static stela_drivers::platform::work::Runtime<SLOTS>>,
@@ -2015,15 +2032,19 @@ fn mount_and_start(
     let threads = &*Box::leak(Box::new(threads));
     // Reserve the error envelope before Initial can publish native state.
     let initial_failure = Box::new_uninit();
+    stage_mark(started, "linux-initial");
     // SAFETY: this exact source, root and broker remain kept on refusal. Each
     // runtime step runs inside the same live native execution segment.
     unsafe { Pin::new(owner.as_ref()).start_initial(work.linux_root(), threads) }
         .map_err(|error| Error::Initial(Box::write(initial_failure, error)))?;
+    stage_mark(started, "linux-initial done");
 
     // SAFETY: submit via this actual original task broker. The service
     // initializes the original resources before dispatching accepted jobs.
+    stage_mark(started, "srcu");
     let srcu = unsafe { stela_linux::srcu::Bootstrap::start(owner.clone(), threads) }
         .map_err(|failure| Error::SrcuStart(failure.error))?;
+    stage_mark(started, "srcu done");
     wait_for_child(
         runtime,
         threads,
@@ -2037,6 +2058,7 @@ fn mount_and_start(
     let ready = unsafe { srcu.join() }.map_err(|failure| Error::Srcu(failure.error))?;
     let probing = host::rdtsc();
     START_TICKS[0].store(probing.wrapping_sub(started), Ordering::Relaxed);
+    stage_mark(started, "probe");
     output::arguments(format_args!(
         "{}\n",
         stela_boot_core::gpu_status::phase_entered(2, None)
@@ -2124,7 +2146,17 @@ fn wait_for_child(
                  Linux's clock, {steps} steps\n",
                 now.saturating_sub(began_ns) / 1_000_000,
             ));
-            super::storage::store_usb_log_in_gpu_start();
+            // A wait that cannot store says so once: a stick whose record stops
+            // here is a start that cannot store, not a stopped start.
+            static REFUSED: AtomicBool = AtomicBool::new(false);
+            if !super::storage::store_usb_log_in_gpu_start()
+                && !REFUSED.swap(true, Ordering::Relaxed)
+            {
+                output::arguments(format_args!(
+                    "GPU START this wait cannot store the USB log: only the processor inside \
+                     the start, holding the host drivers, may\n"
+                ));
+            }
         }
         runtime.step_or_idle().map_err(environment_error)?;
         steps += 1;
