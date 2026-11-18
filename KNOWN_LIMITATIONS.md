@@ -87,8 +87,21 @@ boot reported `CURSOR moved_per_wall_second=0.0` with `samples=0` — so there w
 no front buffer to move to and the panel stayed dark through 22 minutes of
 install. The fix is not a framebuffer copy: the display has to be *taken* (a
 KMS display bound on the Intel display engine, as `display.rs` expects) or the
-firmware's scanout has to be re-programmed after the reset. Segments found and
-what each would need are in `DEVELOPMENT_LOG.md`, session 10 continued.
+firmware's scanout has to be re-programmed after the reset. Segments found and what each would need are in `DEVELOPMENT_LOG.md`, session 10 continued.
+
+Boot 12 (2026-11-18) put the two halves of this on one record. The header
+reads `DISPLAY firmware mode 1920x1200 Bgr` / `DISPLAY runs 1920x1200 Bgr:
+the panel's native resolution`, so the firmware's pipe is lit and the boot
+paints its step list into it; the claim's `reset by Function Level Reset`
+comes 86 s later and nothing has taken the pipe, which is the moment the
+panel goes dark. Separately, that boot's marks show `GPU START stage=submit
+done ms=76` and `wait-step stage=the GPU's probe ms=0` followed by nothing:
+the probe was handed to Linux's handler and never returned, so even a
+successful later step could not re-light the panel. The two are independent —
+keeping the firmware's pipe (no FLR on the display function, which is what
+the Arrow Lake laptops that run a desktop do) fixes the black screen, and the
+probe's stall needs its own answer.
+
 
 ## 2. Intel VMD must stay off in the firmware (it is, and the SSD works)
 

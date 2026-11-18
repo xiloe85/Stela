@@ -1486,3 +1486,98 @@ Image `abf8a3fe73996a275ac145300e929cd3f659eba46f17f2542d5e820db81a3506`,
 53,832,704 bytes, written to the stick and hash-verified;
 `BOOTX64-boot9-2026-11-18.efi` remains the rollback (the image that installed
 macOS).
+
+## Session 13 — boot 12: the probe is submitted, and the handler never steps again (2026-11-18)
+
+Image `abf8a3fe73996a275ac145300e929cd3f659eba46f17f2542d5e820db81a3506`
+(boot 11's image) was booted once, selected `macOS`, left on the black screen
+into the boot's own budget, and powered off by hand. Its record clears the
+question session 12 could not: **the handover worked and the probe itself never
+came back.**
+
+```
+[  108.603] GPU 0000:00:02.0: reset by Function Level Reset; kept BAR0 16 MiB, BAR2 256 MiB
+[  108.604] GPU START phase=linux claim_ms=234
+[  108.632] GPU START stage=linux-initial ms=24
+[  108.636] GPU START stage=linux-initial done ms=28
+[  108.640] GPU START stage=srcu ms=31
+[  108.643] GPU START stage=srcu done ms=35
+[  108.649] GPU START wait-step stage=Linux's first tasks ms=0
+[  108.680] GPU START stage=probe ms=72
+[  108.684] GPU START phase=probe
+[  108.684] GPU START stage=submit done ms=76
+[  108.688] GPU START wait-step stage=the GPU's probe ms=0
+```
+
+`submit done` at 108.684 and `wait-step` at 108.688 are session 12's two marks,
+and they settle what it could only infer: `threads.submit(job)` accepted the
+probe and returned, and the first `threads.dispatcher_step()` in the wait
+returned too. What never printed is the wait's *second* line — `GPU START
+waiting for the GPU's probe: 2000 ms by the counter…` — which
+`wait_for_child` takes on every `WAIT_REPORT_SECONDS`. So the loop did not come
+back from `runtime.step_or_idle()`: the probe job is running on the boot
+processor and has not returned. The stall is inside `gpu::start` — either
+`gpu::stack::start_kernel` (Linux's initcalls) or the synchronous
+`stela_linux_pci_attach` inside `Attached::new_catalogued`, which is where the
+`xe` driver's probe actually runs.
+
+### What the boot also proves about the screen
+
+The same record's header shows the firmware's own display state before any GPU
+work:
+
+```
+[   22.330] DISPLAY firmware mode 1920x1200 Bgr
+[   22.330] DISPLAY EDID (active) prefers 1920x1200 at 60.003 Hz
+[   22.330] DISPLAY runs 1920x1200 Bgr: the panel's native resolution
+```
+
+so the panel is 1920x1200 (a 2250-page buffer at 32 bpp, well inside the 4224
+frame-flip cap that session 12 worried about), the GOP scanout is live, and the
+boot draws its step list into it. The next GPU line is the claim's FLR 86 s
+later. **The screen dies at that line**: the firmware's pipe is what was
+lighting the panel, and the claim resets the display function before anything
+takes the pipe from it. The black screen the user has seen on every boot is
+therefore not the probe's fault — it happens an hour of log earlier, and the
+probe's stall only prevents a driver from ever re-lighting it.
+
+### The change this produced
+
+Two layers of marks, both logging only:
+
+- `crates/stela-boot/src/engine/gpu.rs`, `start()`: `GPU START stage=probe
+  entry`, `initcalls done`, `attach entry`, `attach called`, `attach returned`
+  and `probe done`, stored through `stage_mark`, so the Rust side of the
+  handover is timed even when the C side never returns.
+- `third_party/linux/drivers/gpu/drm/xe/xe_pci.c` and `xe_device.c`: a
+  `stela_step()` that sleeps 1100 ms and then prints `STELA XE <step>`. The
+  sleep is not padding — the boot stores the USB's log only when a Linux line
+  arrives at least a second after its last store (`Host::report`,
+  `LINUX_STORE_MS`), so a mark printed sooner than that is in memory only when
+  the next call hangs, and the stick would name the call *before* the real one.
+  The steps are `display_probe_defer`, `pcim_enable_device`,
+  `xe_device_create`, `xe_info_init_early`, `xe_pci_rebar_resize`,
+  `xe_device_probe_early`, `xe_info_init`, `xe_display_probe`, `xe_pm_probe`,
+  `xe_device_probe`, `xe_pm_init`, and inside the early probe `wa init`,
+  `xe_mmio_probe_early`, `xe_pcode_probe_early`, `xe_device_vram_alloc`.
+  Exported as `third_party/patches/linux/0211-print-each-step.patch`.
+
+The marks cost about 15 s of sleep in the probe, inside the start's 60 s
+budget: a boot that reaches the budget now times out at `Error::Timeout` and
+still leaves the trail on the stick.
+
+Image `cb03dff437c7e24f84f8cd5e65a6718e8f0dac775504d28fa6c62a776b721b09`,
+53,835,776 bytes, hash-verified on the stick; `BOOTX64-boot9-2026-11-18.efi`
+remains the rollback.
+
+Next boot's record should be read in this order: the last `STELA XE` line
+(names the `xe` call that never returned), then `probe entry` / `initcalls
+done` (whether initcalls or the driver's probe), then `attach entry` /
+`attach called`.
+
+Also on the same record, unchanged and unrelated: Wi-Fi `8086:7740` leaves bus
+mastering off after the register `0x82` write, USB4 `8086:7ec2` reports
+`NHI cold ownership: ResetRequired`, `\_SB_.PC00.I2C1.ETPD` maps
+`OutsideResource`, `PNP0CA0` is `UCSI: HardwareInactive`, and the firmware
+bundle loads `i915/mtl_guc_70.bin`, `mtl_huc_gsc.bin`, `mtl_gsc_1.bin` and
+`mtl_dmc.bin` for `8086:7d51`.

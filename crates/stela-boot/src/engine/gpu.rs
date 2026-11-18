@@ -1590,6 +1590,11 @@ unsafe impl ManagedJob for Start {
 }
 
 fn start(kernel: &LinuxKernel, claimed: Vec<Claimed>) -> Started {
+    // The probe is the one call of the start that prints nothing of its own
+    // until it returns, so the marks below name its stages: a record that
+    // stops at one of them says which call of the probe never returned.
+    let began = host::rdtsc();
+    stage_mark(began, "probe entry");
     #[cfg(feature = "nvk")]
     stela_boot_core::heap::set_peak_hook(gate::peak_passed);
     let mut job = Started {
@@ -1610,12 +1615,14 @@ fn start(kernel: &LinuxKernel, claimed: Vec<Claimed>) -> Started {
     }
     // SAFETY: entered, on a task.
     job.result = unsafe { gpu::stack::start_kernel(&command_line) };
+    stage_mark(began, "initcalls done");
     if job.result.is_err() {
         // No source-specific device return was acknowledged.
         core::mem::forget(claimed);
         return job;
     }
     for claimed in claimed {
+        stage_mark(began, "attach entry");
         let authority = {
             let mut function = claimed.device.config.0.borrow_mut();
             // SAFETY: the firmware keys came from the real chipset read on the
@@ -1643,9 +1650,11 @@ fn start(kernel: &LinuxKernel, claimed: Vec<Claimed>) -> Started {
         };
         // SAFETY: entered on the same canonical kernel task. The device and
         // enrolled catalogue retain the exact original configuration/attachment.
+        stage_mark(began, "attach called");
         let attached = unsafe {
             Attached::new_catalogued(kernel, claimed.device, claimed.placement, authority)
         };
+        stage_mark(began, "attach returned");
         match attached {
             Ok(attached) => {
                 // SAFETY: entered.
@@ -1673,6 +1682,7 @@ fn start(kernel: &LinuxKernel, claimed: Vec<Claimed>) -> Started {
             )),
         }
     }
+    stage_mark(began, "probe done");
     job
 }
 

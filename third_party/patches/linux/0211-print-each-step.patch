@@ -1,0 +1,150 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xiloe85 <xiloe85@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 19:01:43 +0000
+Subject: [PATCH] feat(xe): print each step of the PCI probe before the call it
+ names, so a probe that never returns leaves its last step on the stick
+
+---
+ drivers/gpu/drm/xe/xe_device.c | 11 +++++++++++
+ drivers/gpu/drm/xe/xe_pci.c    | 25 +++++++++++++++++++++++++
+ 2 files changed, 36 insertions(+)
+
+diff --git a/drivers/gpu/drm/xe/xe_device.c b/drivers/gpu/drm/xe/xe_device.c
+index a2b076b1dc605bd9a5a17bc382468334eaa7ff9c..dad78bf6cedc284a883134f4320e55e440bed6e2 100644
+--- a/drivers/gpu/drm/xe/xe_device.c
++++ b/drivers/gpu/drm/xe/xe_device.c
+@@ -766,13 +766,22 @@ static int xe_device_vram_alloc(struct xe_device *xe)
+  *
+  * Return: 0 on success, error code on failure
+  */
++/* Stela's probe marks (see xe_pci.c's stela_step). */
++static void stela_step(const char *step)
++{
++	msleep(1100);
++	pr_info("STELA XE %s\n", step);
++}
++
+ int xe_device_probe_early(struct xe_device *xe)
+ {
+ 	int err;
+ 
++	stela_step("probe_early: wa init");
+ 	xe_wa_device_init(xe);
+ 	xe_wa_process_device_oob(xe);
+ 
++	stela_step("probe_early: xe_mmio_probe_early");
+ 	err = xe_mmio_probe_early(xe);
+ 	if (err)
+ 		return err;
+@@ -792,6 +801,7 @@ int xe_device_probe_early(struct xe_device *xe)
+ 	 * initialization is complete. Until done, any MMIO or lmem access from
+ 	 * the driver will be blocked
+ 	 */
++	stela_step("probe_early: xe_pcode_probe_early");
+ 	err = xe_pcode_probe_early(xe);
+ 	if (err || xe_survivability_mode_is_requested(xe)) {
+ 		int save_err = err;
+@@ -820,6 +830,7 @@ int xe_device_probe_early(struct xe_device *xe)
+ 	drm_dbg(&xe->drm, "wedged_mode: setting mode (%u) %s\n",
+ 		xe->wedged.mode, xe_wedged_mode_to_string(xe->wedged.mode));
+ 
++	stela_step("probe_early: xe_device_vram_alloc");
+ 	err = xe_device_vram_alloc(xe);
+ 	if (err)
+ 		return err;
+diff --git a/drivers/gpu/drm/xe/xe_pci.c b/drivers/gpu/drm/xe/xe_pci.c
+index 9cd873708136c5ac6cedc1360e89af67c446a1b2..a5fdc2ecc1e187f63e931f1e0061ed85e65b55c0 100644
+--- a/drivers/gpu/drm/xe/xe_pci.c
++++ b/drivers/gpu/drm/xe/xe_pci.c
+@@ -6,6 +6,7 @@
+ #include "xe_pci.h"
+ 
+ #include <kunit/static_stub.h>
++#include <linux/delay.h>
+ #include <linux/device/driver.h>
+ #include <linux/module.h>
+ #include <linux/pci.h>
+@@ -1077,6 +1078,19 @@ static void xe_pci_remove(struct pci_dev *pdev)
+  * caller. Therefore there is no consequence on those specific callers when
+  * function error injection skips the whole function.
+  */
++/*
++ * Stela's probe marks: the boot prints the step before the call that follows
++ * it, and stores the USB's log when a line arrives at least a second after
++ * its last store (`report` in stela-boot's gpu.rs). The wait is that
++ * interval, so each step is on the stick before the next call can hang and a
++ * probe that never returns names the call it stopped in.
++ */
++static void stela_step(const char *step)
++{
++	msleep(1100);
++	pr_info("STELA XE %s\n", step);
++}
++
+ static int xe_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ {
+ 	const struct xe_device_desc *desc = (const void *)ent->driver_data;
+@@ -1106,13 +1120,16 @@ static int xe_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 		return -ENODEV;
+ 	}
+ 
++	stela_step("display_probe_defer");
+ 	if (xe_display_driver_probe_defer(pdev))
+ 		return -EPROBE_DEFER;
+ 
++	stela_step("pcim_enable_device");
+ 	err = pcim_enable_device(pdev);
+ 	if (err)
+ 		return err;
+ 
++	stela_step("xe_device_create");
+ 	xe = xe_device_create(pdev);
+ 	if (IS_ERR(xe))
+ 		return PTR_ERR(xe);
+@@ -1123,12 +1140,15 @@ static int xe_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 
+ 	pci_set_master(pdev);
+ 
++	stela_step("xe_info_init_early");
+ 	err = xe_info_init_early(xe, desc, subplatform_desc);
+ 	if (err)
+ 		return err;
+ 
++	stela_step("xe_pci_rebar_resize");
+ 	xe_pci_rebar_resize(xe);
+ 
++	stela_step("xe_device_probe_early");
+ 	err = xe_device_probe_early(xe);
+ 	/*
+ 	 * In Boot Survivability mode, no drm card is exposed and driver
+@@ -1142,10 +1162,12 @@ static int xe_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	if (err)
+ 		return err;
+ 
++	stela_step("xe_info_init");
+ 	err = xe_info_init(xe, desc);
+ 	if (err)
+ 		return err;
+ 
++	stela_step("xe_display_probe");
+ 	err = xe_display_probe(xe);
+ 	if (err)
+ 		return err;
+@@ -1174,14 +1196,17 @@ static int xe_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 		str_yes_no(xe_device_has_sriov(xe)),
+ 		xe_sriov_mode_to_string(xe_device_sriov_mode(xe)));
+ 
++	stela_step("xe_pm_probe");
+ 	err = xe_pm_probe(xe);
+ 	if (err)
+ 		return err;
+ 
++	stela_step("xe_device_probe");
+ 	err = xe_device_probe(xe);
+ 	if (err)
+ 		return err;
+ 
++	stela_step("xe_pm_init");
+ 	err = xe_pm_init(xe);
+ 	if (err)
+ 		goto err_driver_cleanup;
