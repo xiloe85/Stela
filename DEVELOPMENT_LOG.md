@@ -1566,9 +1566,10 @@ The marks cost about 15 s of sleep in the probe, inside the start's 60 s
 budget: a boot that reaches the budget now times out at `Error::Timeout` and
 still leaves the trail on the stick.
 
-Image `cb03dff437c7e24f84f8cd5e65a6718e8f0dac775504d28fa6c62a776b721b09`,
+Image `e153a85b2da660d0435884b75a4dcb1409b7d9d2661eb4f7083f804c107cbf55`,
 53,835,776 bytes, hash-verified on the stick; `BOOTX64-boot9-2026-11-18.efi`
-remains the rollback.
+remains the rollback. (An earlier build of the same sources,
+`cb03dff4…`, was byte-different: two builds of one tree are not identical.)
 
 Next boot's record should be read in this order: the last `STELA XE` line
 (names the `xe` call that never returned), then `probe entry` / `initcalls
